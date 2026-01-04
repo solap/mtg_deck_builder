@@ -67,11 +67,12 @@ defmodule MtgDeckBuilder.AI.AnthropicClient do
     - {:ok, %ParsedCommand{}} on success
     - {:error, reason} on failure
   """
-  @spec parse_command(String.t()) :: {:ok, ParsedCommand.t()} | {:error, String.t()}
-  def parse_command(input) when is_binary(input) do
+  @spec parse_command(String.t(), keyword()) :: {:ok, ParsedCommand.t()} | {:error, String.t()}
+  def parse_command(input, opts \\ []) when is_binary(input) do
     start_time = System.monotonic_time(:millisecond)
+    deck_card_names = Keyword.get(opts, :deck_card_names, [])
 
-    case do_api_call(input) do
+    case do_api_call(input, deck_card_names) do
       {:ok, response} ->
         latency = System.monotonic_time(:millisecond) - start_time
         handle_success_response(response, input, latency)
@@ -83,7 +84,7 @@ defmodule MtgDeckBuilder.AI.AnthropicClient do
     end
   end
 
-  defp do_api_call(input) do
+  defp do_api_call(input, deck_card_names) do
     api_key = get_api_key()
     model = get_model()
 
@@ -94,31 +95,7 @@ defmodule MtgDeckBuilder.AI.AnthropicClient do
         Jason.encode!(%{
           "model" => model,
           "max_tokens" => 256,
-          "system" => """
-          You are parsing Magic: The Gathering deck building commands.
-
-          IMPORTANT: Users often use acronyms for card names. Expand them to full card names:
-          - AOTG = Anger of the Gods
-          - SFM = Stoneforge Mystic
-          - BBE = Bloodbraid Elf
-          - JtMS = Jace, the Mind Sculptor
-          - LotV = Liliana of the Veil
-          - GoST = Geist of Saint Traft
-          - SoFI = Sword of Fire and Ice
-          - ToE = Teferi, Time Raveler (or Terror of the Peaks based on context)
-          - DRS = Deathrite Shaman
-          - etc.
-
-          If you see capitalized letters that look like an acronym, try to match it to a known MTG card.
-          Always output the full card name, not the acronym.
-
-          BOARD NAMES:
-          - "mainboard", "main", "mb" = mainboard
-          - "sideboard", "side", "sb" = sideboard
-          - "staging", "staging area", "stage", "removed" = staging (NOT sideboard!)
-
-          When users say "staging area" or "stage", always use "staging" as the target_board or source_board.
-          """,
+          "system" => build_system_prompt(deck_card_names),
           "tools" => [@tool_schema],
           "tool_choice" => %{"type" => "tool", "name" => "deck_command"},
           "messages" => [
@@ -200,6 +177,49 @@ defmodule MtgDeckBuilder.AI.AnthropicClient do
   end
 
   defp extract_tool_input(_), do: {:error, "Invalid response format"}
+
+  defp build_system_prompt(deck_card_names) do
+    base_prompt = """
+    You are parsing Magic: The Gathering deck building commands.
+
+    IMPORTANT: Users often use acronyms for card names. Expand them to full card names:
+    - AOTG = Anger of the Gods
+    - SFM = Stoneforge Mystic
+    - BBE = Bloodbraid Elf
+    - JtMS = Jace, the Mind Sculptor
+    - LotV = Liliana of the Veil
+    - GoST = Geist of Saint Traft
+    - SoFI = Sword of Fire and Ice
+    - ToE = Teferi, Time Raveler (or Terror of the Peaks based on context)
+    - DRS = Deathrite Shaman
+    - etc.
+
+    If you see capitalized letters that look like an acronym, try to match it to a known MTG card.
+    Always output the full card name, not the acronym.
+
+    BOARD NAMES:
+    - "mainboard", "main", "mb" = mainboard
+    - "sideboard", "side", "sb" = sideboard
+    - "staging", "staging area", "stage", "removed" = staging (NOT sideboard!)
+
+    When users say "staging area" or "stage", always use "staging" as the target_board or source_board.
+    """
+
+    if Enum.empty?(deck_card_names) do
+      base_prompt
+    else
+      deck_context = """
+
+      CURRENT DECK CARDS (use these to match acronyms/abbreviations):
+      #{Enum.join(deck_card_names, ", ")}
+
+      When the user types an abbreviation like "BT", match it to a card in their deck.
+      For example, if "Bitter Triumph" is in the deck and user says "BT", use "Bitter Triumph".
+      """
+
+      base_prompt <> deck_context
+    end
+  end
 
   defp log_api_error(reason, latency) do
     error_type =

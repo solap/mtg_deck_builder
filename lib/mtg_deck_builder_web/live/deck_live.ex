@@ -319,7 +319,9 @@ defmodule MtgDeckBuilderWeb.DeckLive do
 
   def handle_info({:execute_with_card, command, card}, socket) do
     # Re-parse and execute with the specific card
-    case AnthropicClient.parse_command(command) do
+    deck_card_names = get_deck_card_names(socket.assigns.deck)
+
+    case AnthropicClient.parse_command(command, deck_card_names: deck_card_names) do
       {:ok, parsed_cmd} ->
         execute_command_with_card(parsed_cmd, card, socket)
 
@@ -334,7 +336,9 @@ defmodule MtgDeckBuilderWeb.DeckLive do
   end
 
   defp process_chat_command(command, socket) do
-    case AnthropicClient.parse_command(command) do
+    deck_card_names = get_deck_card_names(socket.assigns.deck)
+
+    case AnthropicClient.parse_command(command, deck_card_names: deck_card_names) do
       {:ok, parsed_cmd} ->
         execute_parsed_command(parsed_cmd, command, socket)
 
@@ -344,6 +348,13 @@ defmodule MtgDeckBuilderWeb.DeckLive do
         |> add_assistant_message(ResponseFormatter.format_error(:api_unavailable, %{}))
         |> sync_chat()
     end
+  end
+
+  defp get_deck_card_names(deck) do
+    mainboard_names = Enum.map(deck.mainboard, & &1.name)
+    sideboard_names = Enum.map(deck.sideboard, & &1.name)
+    staging_names = Enum.map(deck.removed_cards || [], & &1.name)
+    Enum.uniq(mainboard_names ++ sideboard_names ++ staging_names)
   end
 
   defp execute_parsed_command(parsed_cmd, original_command, socket) do
