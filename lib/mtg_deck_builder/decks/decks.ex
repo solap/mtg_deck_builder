@@ -327,4 +327,15 @@ defmodule MtgDeckBuilder.Decks do
     |> Map.put(:removed_cards, new_removed)
     |> Map.put(:updated_at, DateTime.utc_now() |> DateTime.to_iso8601())
   end
+
+  @doc """
+  Clears all cards from the specified board.
+  """
+  def clear_board(%Deck{} = deck, board) when board in [:mainboard, :sideboard, :staging] do
+    field = board_to_field(board)
+
+    deck
+    |> Map.put(field, [])
+    |> Map.put(:updated_at, DateTime.utc_now() |> DateTime.to_iso8601())
+  end
 end

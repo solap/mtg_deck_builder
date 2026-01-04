@@ -182,6 +182,17 @@ defmodule MtgDeckBuilderWeb.DeckLive do
     {:noreply, socket |> assign(:deck, updated_deck) |> sync_deck()}
   end
 
+  def handle_event("clear_board", %{"board" => board}, socket) do
+    board_atom = String.to_existing_atom(board)
+    updated_deck = Decks.clear_board(socket.assigns.deck, board_atom)
+
+    {:noreply,
+     socket
+     |> assign(:deck, updated_deck)
+     |> assign(:stats, Stats.calculate(updated_deck))
+     |> sync_deck()}
+  end
+
   def handle_event("load_sample_deck", _params, socket) do
     case load_sample_deck("reanimator_4c") do
       {:ok, deck} ->
@@ -781,9 +792,22 @@ defmodule MtgDeckBuilderWeb.DeckLive do
 
             <!-- Staging Area -->
               <div class="sm:col-span-2">
-                <h3 class="text-sm font-medium text-amber-400 mb-2">
-                  Staging Area ({length(@deck.removed_cards)} cards)
-                </h3>
+                <div class="flex items-center justify-between mb-2">
+                  <h3 class="text-sm font-medium text-amber-400">
+                    Staging Area ({length(@deck.removed_cards)} cards)
+                  </h3>
+                  <%= if length(@deck.removed_cards) > 0 do %>
+                    <button
+                      type="button"
+                      phx-click="clear_board"
+                      phx-value-board="staging"
+                      class="text-xs text-slate-500 hover:text-red-400"
+                      data-confirm="Clear all cards from Staging Area?"
+                    >
+                      Clear
+                    </button>
+                  <% end %>
+                </div>
                 <div class="bg-slate-900 rounded-lg p-3 border border-slate-700 min-h-[100px]">
                 <%= if Enum.empty?(@deck.removed_cards) do %>
                   <p class="text-slate-500 text-sm text-center py-4">
@@ -1005,9 +1029,22 @@ defmodule MtgDeckBuilderWeb.DeckLive do
   defp board_list(assigns) do
     ~H"""
     <div>
-      <h3 class="text-sm font-medium text-slate-300 mb-2">
-        {@title} ({@count}/{@max_count} cards)
-      </h3>
+      <div class="flex items-center justify-between mb-2">
+        <h3 class="text-sm font-medium text-slate-300">
+          {@title} ({@count}/{@max_count} cards)
+        </h3>
+        <%= if @count > 0 do %>
+          <button
+            type="button"
+            phx-click="clear_board"
+            phx-value-board={@board}
+            class="text-xs text-slate-500 hover:text-red-400"
+            data-confirm={"Clear all cards from #{@title}?"}
+          >
+            Clear
+          </button>
+        <% end %>
+      </div>
       <div class="bg-slate-900 rounded-lg p-3 min-h-[200px] border border-slate-700">
         <%= if Enum.empty?(@cards) do %>
           <p class="text-slate-500 text-sm text-center py-8">
