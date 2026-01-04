@@ -64,28 +64,40 @@ defmodule MtgDeckBuilder.Chat.CardResolver do
 
     cards = Repo.all(query)
 
-    # Filter by format legality
-    legal_cards = filter_by_format(cards, format)
+    # First check for exact/high-confidence match in ALL cards (before format filtering)
+    # This lets the executor show a proper "not legal in format" error
+    exact_match = Enum.find(cards, fn card ->
+      calculate_similarity(card.name, name) >= @high_similarity_threshold
+    end)
 
-    case legal_cards do
-      [] ->
-        # Return suggestions even if not legal in format
-        suggestions = Enum.map(cards, & &1.name) |> Enum.take(@max_suggestions)
-        {:not_found, suggestions}
+    if exact_match do
+      # Return the exact match - let executor handle format legality
+      {:ok, exact_match}
+    else
+      # No exact match, filter by format and look for best match
+      legal_cards = filter_by_format(cards, format)
 
-      [card] ->
-        # Single match
-        {:ok, card}
+      case legal_cards do
+        [] ->
+          # Check if any card in deck matches
+          deck_match = Enum.find(cards, fn card ->
+            card.scryfall_id in deck_card_ids
+          end)
 
-      [first | _rest] = matches ->
-        # Check if first match is high confidence
-        similarity = calculate_similarity(first.name, name)
+          if deck_match do
+            {:ok, deck_match}
+          else
+            # Return suggestions
+            suggestions = Enum.map(cards, & &1.name) |> Enum.take(@max_suggestions)
+            {:not_found, suggestions}
+          end
 
-        if similarity >= @high_similarity_threshold do
-          {:ok, first}
-        else
-          # Before returning ambiguous, check if one of the matches is in the deck
-          # Prefer cards already in the deck
+        [card] ->
+          # Single legal match
+          {:ok, card}
+
+        [_first | _rest] = matches ->
+          # Multiple legal matches - prefer deck cards
           deck_match = Enum.find(matches, fn card ->
             card.scryfall_id in deck_card_ids
           end)
@@ -95,7 +107,7 @@ defmodule MtgDeckBuilder.Chat.CardResolver do
           else
             {:ambiguous, matches}
           end
-        end
+      end
     end
   end
 
