@@ -144,6 +144,22 @@ defmodule MtgDeckBuilderWeb.DeckLive do
     {:noreply, socket |> assign(:deck, updated_deck) |> sync_deck()}
   end
 
+  def handle_event("load_sample_deck", _params, socket) do
+    case load_sample_deck("reanimator_4c") do
+      {:ok, deck} ->
+        {:noreply,
+         socket
+         |> assign(:deck, deck)
+         |> assign(:format, deck.format)
+         |> assign(:stats, Stats.calculate(deck))
+         |> sync_deck()
+         |> put_flash(:info, "Loaded 4c Reanimator sample deck")}
+
+      {:error, reason} ->
+        {:noreply, put_flash(socket, :error, "Failed to load sample deck: #{reason}")}
+    end
+  end
+
   def handle_event("load_deck", %{"deck_json" => deck_json}, socket) when is_binary(deck_json) do
     case Jason.decode(deck_json) do
       {:ok, data} ->
@@ -162,6 +178,22 @@ defmodule MtgDeckBuilderWeb.DeckLive do
   end
 
   def handle_event("load_deck", _params, socket), do: {:noreply, socket}
+
+  # Load a sample deck from priv/sample_decks
+  defp load_sample_deck(name) do
+    path = Application.app_dir(:mtg_deck_builder, "priv/sample_decks/#{name}.json")
+
+    case File.read(path) do
+      {:ok, json} ->
+        case Jason.decode(json) do
+          {:ok, data} -> {:ok, decode_deck(data)}
+          {:error, _} -> {:error, "Invalid JSON"}
+        end
+
+      {:error, _} ->
+        {:error, "Sample deck not found"}
+    end
+  end
 
   # Helper to sync deck to localStorage and recalculate stats
   defp sync_deck(socket) do
@@ -249,10 +281,10 @@ defmodule MtgDeckBuilderWeb.DeckLive do
   @impl true
   def render(assigns) do
     ~H"""
-    <div id="deck-container" phx-hook="DeckStorage" class="max-w-7xl mx-auto px-4 py-6">
-      <div class="grid grid-cols-1 lg:grid-cols-3 gap-6">
+    <div id="deck-container" phx-hook="DeckStorage" class="px-4 py-6">
+      <div class="flex flex-col lg:flex-row gap-6">
         <!-- Search Panel -->
-        <div class="lg:col-span-1">
+        <div class="w-full lg:w-80 xl:w-96 flex-shrink-0">
           <div class="bg-slate-800 rounded-lg p-4 border border-slate-700">
             <h2 class="text-lg font-semibold text-amber-400 mb-4">Card Search</h2>
 
@@ -305,14 +337,23 @@ defmodule MtgDeckBuilderWeb.DeckLive do
         </div>
 
         <!-- Deck Panel -->
-        <div class="lg:col-span-2">
+        <div class="flex-1 min-w-0">
           <div class="bg-slate-800 rounded-lg p-4 border border-slate-700">
             <div class="flex items-center justify-between mb-4">
               <h2 class="text-lg font-semibold text-amber-400">Deck List</h2>
-              <span class="text-sm text-slate-400 capitalize">{@format} Format</span>
+              <div class="flex items-center gap-3">
+                <button
+                  type="button"
+                  phx-click="load_sample_deck"
+                  class="text-xs text-slate-500 hover:text-slate-300 underline"
+                >
+                  Load sample
+                </button>
+                <span class="text-sm text-slate-400 capitalize">{@format} Format</span>
+              </div>
             </div>
 
-            <div class="grid grid-cols-1 md:grid-cols-2 gap-4">
+            <div class="grid grid-cols-1 sm:grid-cols-2 2xl:grid-cols-3 gap-4">
               <.board_list
                 title="Mainboard"
                 board="mainboard"
@@ -330,12 +371,13 @@ defmodule MtgDeckBuilderWeb.DeckLive do
                 max_count={15}
                 empty_message="Add cards to sideboard"
               />
+
             <!-- Staging Area -->
-              <div class="md:col-span-2 mt-4">
+              <div class="sm:col-span-2 2xl:col-span-1 sm:mt-4 2xl:mt-0">
                 <h3 class="text-sm font-medium text-amber-400 mb-2">
                   Staging Area ({length(@deck.removed_cards)} cards)
                 </h3>
-                <div class="bg-slate-800/50 rounded-lg p-3 border border-slate-600 min-h-[100px]">
+                <div class="bg-slate-900 rounded-lg p-3 border border-slate-700 min-h-[200px] max-h-[50vh] overflow-y-auto">
                 <%= if Enum.empty?(@deck.removed_cards) do %>
                   <p class="text-slate-500 text-sm text-center py-4">
                     Move cards here to consider later or when switching formats
