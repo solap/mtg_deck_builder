@@ -901,7 +901,7 @@ defmodule MtgDeckBuilderWeb.DeckLive do
       </div>
 
       <!-- Messages -->
-      <div class="p-3 space-y-2 max-h-40 overflow-y-auto flex-1" id="chat-messages">
+      <div class="p-3 space-y-2 max-h-40 overflow-y-auto flex-1" id="chat-messages" phx-hook="ChatScroll">
         <%= if Enum.empty?(@messages) do %>
           <div class="text-slate-500 text-xs text-center py-2">
             <p>"add 4 lightning bolt"</p>
