@@ -54,7 +54,7 @@ defmodule MtgDeckBuilderWeb.DeckLive do
 
     socket =
       if count_moved > 0 do
-        put_flash(socket, :info, "#{count_moved} card(s) moved to Removed Cards (not legal in #{format})")
+        put_flash(socket, :info, "#{count_moved} card(s) moved to Staging Area (not legal in #{format})")
       else
         socket
       end
@@ -127,6 +127,23 @@ defmodule MtgDeckBuilderWeb.DeckLive do
     end
   end
 
+  def handle_event("move_to_staging", %{"scryfall_id" => scryfall_id, "board" => board}, socket) do
+    board_atom = String.to_existing_atom(board)
+
+    case Decks.move_to_staging(socket.assigns.deck, scryfall_id, board_atom) do
+      {:ok, updated_deck} ->
+        {:noreply, socket |> assign(:deck, updated_deck) |> sync_deck()}
+
+      {:error, reason} ->
+        {:noreply, put_flash(socket, :error, reason)}
+    end
+  end
+
+  def handle_event("remove_from_staging", %{"scryfall_id" => scryfall_id}, socket) do
+    updated_deck = Decks.remove_from_staging(socket.assigns.deck, scryfall_id)
+    {:noreply, socket |> assign(:deck, updated_deck) |> sync_deck()}
+  end
+
   def handle_event("load_deck", %{"deck_json" => deck_json}, socket) when is_binary(deck_json) do
     case Jason.decode(deck_json) do
       {:ok, data} ->
@@ -173,13 +190,17 @@ defmodule MtgDeckBuilderWeb.DeckLive do
         _ -> :modern
       end
 
+    removed_cards =
+      (data["removed_cards"] || [])
+      |> Enum.map(&decode_removed_card/1)
+
     %Deck{
       id: data["id"] || Ecto.UUID.generate(),
       name: data["name"] || "New Deck",
       format: format,
       mainboard: mainboard,
       sideboard: sideboard,
-      removed_cards: data["removed_cards"] || [],
+      removed_cards: removed_cards,
       created_at: data["created_at"],
       updated_at: data["updated_at"]
     }
@@ -197,6 +218,31 @@ defmodule MtgDeckBuilderWeb.DeckLive do
       colors: data["colors"] || [],
       price: data["price"],
       is_basic_land: data["is_basic_land"] || false
+    }
+  end
+
+  defp decode_removed_card(data) when is_map(data) do
+    original_board =
+      case data["original_board"] do
+        "mainboard" -> :mainboard
+        "sideboard" -> :sideboard
+        b when is_atom(b) -> b
+        _ -> :mainboard
+      end
+
+    %MtgDeckBuilder.Decks.RemovedCard{
+      scryfall_id: data["scryfall_id"],
+      name: data["name"],
+      quantity: data["quantity"] || 1,
+      mana_cost: data["mana_cost"],
+      cmc: data["cmc"] || 0.0,
+      type_line: data["type_line"],
+      oracle_text: data["oracle_text"],
+      colors: data["colors"] || [],
+      price: data["price"],
+      is_basic_land: data["is_basic_land"] || false,
+      removal_reason: data["removal_reason"],
+      original_board: original_board
     }
   end
 
@@ -267,60 +313,42 @@ defmodule MtgDeckBuilderWeb.DeckLive do
             </div>
 
             <div class="grid grid-cols-1 md:grid-cols-2 gap-4">
-              <!-- Mainboard -->
-              <div>
-                <h3 class="text-sm font-medium text-slate-300 mb-2">
-                  Mainboard ({Deck.mainboard_count(@deck)} cards)
-                </h3>
-                <div class="bg-slate-900 rounded-lg p-3 min-h-[200px] max-h-[50vh] overflow-y-auto border border-slate-700">
-                  <%= if Enum.empty?(@deck.mainboard) do %>
-                    <p class="text-slate-500 text-sm text-center py-8">
-                      No cards yet - search and add some!
-                    </p>
-                  <% else %>
-                    <div class="space-y-1">
-                      <%= for card <- @deck.mainboard do %>
-                        <.deck_card card={card} board="mainboard" />
-                      <% end %>
-                    </div>
-                  <% end %>
-                </div>
-              </div>
+              <.board_list
+                title="Mainboard"
+                board="mainboard"
+                cards={@deck.mainboard}
+                count={Deck.mainboard_count(@deck)}
+                max_count={60}
+                empty_message="No cards yet - search and add some!"
+              />
 
-              <!-- Sideboard -->
-              <div>
-                <h3 class="text-sm font-medium text-slate-300 mb-2">
-                  Sideboard ({Deck.sideboard_count(@deck)}/15 cards)
-                </h3>
-                <div class="bg-slate-900 rounded-lg p-3 min-h-[200px] max-h-[50vh] overflow-y-auto border border-slate-700">
-                  <%= if Enum.empty?(@deck.sideboard) do %>
-                    <p class="text-slate-500 text-sm text-center py-8">
-                      Add cards to sideboard
-                    </p>
-                  <% else %>
-                    <div class="space-y-1">
-                      <%= for card <- @deck.sideboard do %>
-                        <.deck_card card={card} board="sideboard" />
-                      <% end %>
-                    </div>
-                  <% end %>
-                </div>
-              </div>
-            <!-- Removed Cards -->
-            <%= if not Enum.empty?(@deck.removed_cards) do %>
+              <.board_list
+                title="Sideboard"
+                board="sideboard"
+                cards={@deck.sideboard}
+                count={Deck.sideboard_count(@deck)}
+                max_count={15}
+                empty_message="Add cards to sideboard"
+              />
+            <!-- Staging Area -->
               <div class="md:col-span-2 mt-4">
-                <h3 class="text-sm font-medium text-red-400 mb-2">
-                  Removed Cards ({length(@deck.removed_cards)})
+                <h3 class="text-sm font-medium text-amber-400 mb-2">
+                  Staging Area ({length(@deck.removed_cards)} cards)
                 </h3>
-                <div class="bg-red-900/20 rounded-lg p-3 border border-red-800">
+                <div class="bg-slate-800/50 rounded-lg p-3 border border-slate-600 min-h-[100px]">
+                <%= if Enum.empty?(@deck.removed_cards) do %>
+                  <p class="text-slate-500 text-sm text-center py-4">
+                    Move cards here to consider later or when switching formats
+                  </p>
+                <% else %>
                   <div class="space-y-1">
                     <%= for card <- @deck.removed_cards do %>
                       <.removed_card card={card} format={@format} />
                     <% end %>
                   </div>
+                <% end %>
                 </div>
               </div>
-            <% end %>
             </div>
 
             <!-- Statistics Panel -->
@@ -392,6 +420,45 @@ defmodule MtgDeckBuilderWeb.DeckLive do
     """
   end
 
+  attr :title, :string, required: true
+  attr :board, :string, required: true
+  attr :cards, :list, required: true
+  attr :count, :integer, required: true
+  attr :max_count, :integer, required: true
+  attr :empty_message, :string, required: true
+
+  defp board_list(assigns) do
+    ~H"""
+    <div>
+      <h3 class="text-sm font-medium text-slate-300 mb-2">
+        {@title} ({@count}/{@max_count} cards)
+      </h3>
+      <div class="bg-slate-900 rounded-lg p-3 min-h-[200px] max-h-[50vh] overflow-y-auto border border-slate-700">
+        <%= if Enum.empty?(@cards) do %>
+          <p class="text-slate-500 text-sm text-center py-8">
+            {@empty_message}
+          </p>
+        <% else %>
+          <div class="space-y-3">
+            <%= for {type, cards} <- group_cards_by_type(@cards) do %>
+              <div>
+                <h4 class="text-xs font-medium text-slate-500 uppercase tracking-wide mb-1">
+                  {type} ({type_count(cards)})
+                </h4>
+                <div class="space-y-1">
+                  <%= for card <- cards do %>
+                    <.deck_card card={card} board={@board} />
+                  <% end %>
+                </div>
+              </div>
+            <% end %>
+          </div>
+        <% end %>
+      </div>
+    </div>
+    """
+  end
+
   attr :card, MtgDeckBuilder.Cards.Card, required: true
 
   defp card_result(assigns) do
@@ -442,6 +509,10 @@ defmodule MtgDeckBuilderWeb.DeckLive do
   attr :board, :string, required: true
 
   defp deck_card(assigns) do
+    # Fetch full card data for complete details
+    full_card = MtgDeckBuilder.Cards.get_by_scryfall_id(assigns.card.scryfall_id)
+    assigns = assign(assigns, :full_card, full_card)
+
     ~H"""
     <details class="bg-slate-800 rounded group">
       <summary class="flex items-center justify-between px-2 py-1.5 cursor-pointer hover:bg-slate-700 rounded list-none">
@@ -484,24 +555,37 @@ defmodule MtgDeckBuilderWeb.DeckLive do
           </button>
           <button
             type="button"
+            phx-click="move_to_staging"
+            phx-value-scryfall_id={@card.scryfall_id}
+            phx-value-board={@board}
+            class="text-slate-400 hover:text-amber-400 px-1"
+            title="Move to staging area"
+          >
+            ||
+          </button>
+          <button
+            type="button"
             phx-click="remove_card"
             phx-value-scryfall_id={@card.scryfall_id}
             phx-value-board={@board}
             class="text-slate-400 hover:text-red-400 px-1"
+            title="Remove from deck"
           >
             ×
           </button>
         </div>
       </summary>
-      <div class="px-3 pb-2 pt-1 border-t border-slate-700 text-xs space-y-1">
-        <div class="text-slate-400">{@card.type_line}</div>
-        <%= if @card.oracle_text do %>
-          <div class="text-slate-300 whitespace-pre-wrap">{@card.oracle_text}</div>
-        <% end %>
-        <%= if @card.price do %>
-          <div class="text-green-400">${@card.price}</div>
-        <% end %>
-      </div>
+      <%= if @full_card do %>
+        <div class="px-3 pb-2 pt-1 border-t border-slate-700 text-xs space-y-1">
+          <div class="text-slate-400">{@full_card.type_line}</div>
+          <%= if @full_card.oracle_text do %>
+            <div class="text-slate-300 whitespace-pre-wrap">{@full_card.oracle_text}</div>
+          <% end %>
+          <%= if @full_card.prices["usd"] do %>
+            <div class="text-green-400">${@full_card.prices["usd"]}</div>
+          <% end %>
+        </div>
+      <% end %>
     </details>
     """
   end
@@ -510,59 +594,86 @@ defmodule MtgDeckBuilderWeb.DeckLive do
   attr :format, :atom, required: true
 
   defp removed_card(assigns) do
-    # Check if card is now legal in current format
+    # Fetch full card data for complete details and legality check
+    full_card = MtgDeckBuilder.Cards.get_by_scryfall_id(assigns.card.scryfall_id)
+
     is_now_legal =
-      case MtgDeckBuilder.Cards.get_by_scryfall_id(assigns.card.scryfall_id) do
+      case full_card do
         nil -> false
         card -> MtgDeckBuilder.Decks.Validator.legal_in_format?(card, assigns.format)
       end
 
-    assigns = assign(assigns, :is_now_legal, is_now_legal)
+    assigns =
+      assigns
+      |> assign(:is_now_legal, is_now_legal)
+      |> assign(:full_card, full_card)
 
     ~H"""
-    <div class={[
-      "flex items-center justify-between rounded px-2 py-1.5 group",
+    <details class={[
+      "rounded group",
       if(@is_now_legal, do: "bg-green-900/30 border border-green-700", else: "bg-slate-800")
     ]}>
-      <div class="flex items-center gap-2 min-w-0 flex-1">
-        <span class="text-amber-400 font-medium text-sm w-6">{@card.quantity}x</span>
-        <span class="text-slate-100 text-sm truncate">{@card.name}</span>
-        <%= if @is_now_legal do %>
-          <span class="text-green-400 text-xs">(now legal - restore?)</span>
-        <% else %>
-          <span class="text-red-400 text-xs">({@card.removal_reason})</span>
-        <% end %>
-      </div>
-      <div class={[
-        "flex items-center gap-1 transition-opacity",
-        if(@is_now_legal, do: "opacity-100", else: "opacity-0 group-hover:opacity-100")
-      ]}>
-        <button
-          type="button"
-          phx-click="restore_card"
-          phx-value-scryfall_id={@card.scryfall_id}
-          phx-value-board="mainboard"
-          class={[
-            "text-xs px-2 py-0.5 rounded",
-            if(@is_now_legal, do: "bg-green-600 hover:bg-green-500 text-white", else: "bg-slate-600 hover:bg-slate-500 text-slate-100")
-          ]}
-        >
-          +Main
-        </button>
-        <button
-          type="button"
-          phx-click="restore_card"
-          phx-value-scryfall_id={@card.scryfall_id}
-          phx-value-board="sideboard"
-          class={[
-            "text-xs px-2 py-0.5 rounded",
-            if(@is_now_legal, do: "bg-green-600 hover:bg-green-500 text-white", else: "bg-slate-600 hover:bg-slate-500 text-slate-100")
-          ]}
-        >
-          +Side
-        </button>
-      </div>
-    </div>
+      <summary class="flex items-center justify-between px-2 py-1.5 cursor-pointer hover:bg-slate-700/50 rounded list-none">
+        <div class="flex items-center gap-2 min-w-0 flex-1">
+          <span class="text-amber-400 font-medium text-sm w-6">{@card.quantity}x</span>
+          <span class="text-slate-100 text-sm truncate">{@card.name}</span>
+          <span class="text-slate-400 text-xs whitespace-nowrap">{format_mana_cost(@card.mana_cost)}</span>
+          <%= if @is_now_legal do %>
+            <span class="text-green-400 text-xs">(now legal)</span>
+          <% else %>
+            <span class="text-slate-400 text-xs">({staging_reason(@card.removal_reason)})</span>
+          <% end %>
+        </div>
+        <div class="flex items-center gap-1">
+          <button
+            type="button"
+            phx-click="restore_card"
+            phx-value-scryfall_id={@card.scryfall_id}
+            phx-value-board="mainboard"
+            class={[
+              "text-xs px-2 py-0.5 rounded",
+              if(@is_now_legal, do: "bg-green-600 hover:bg-green-500 text-white", else: "bg-slate-600 hover:bg-slate-500 text-slate-100")
+            ]}
+            title="Restore to mainboard"
+          >
+            +Main
+          </button>
+          <button
+            type="button"
+            phx-click="restore_card"
+            phx-value-scryfall_id={@card.scryfall_id}
+            phx-value-board="sideboard"
+            class={[
+              "text-xs px-2 py-0.5 rounded",
+              if(@is_now_legal, do: "bg-green-600 hover:bg-green-500 text-white", else: "bg-slate-600 hover:bg-slate-500 text-slate-100")
+            ]}
+            title="Restore to sideboard"
+          >
+            +Side
+          </button>
+          <button
+            type="button"
+            phx-click="remove_from_staging"
+            phx-value-scryfall_id={@card.scryfall_id}
+            class="text-slate-400 hover:text-red-400 px-1"
+            title="Remove from staging"
+          >
+            ×
+          </button>
+        </div>
+      </summary>
+      <%= if @full_card do %>
+        <div class="px-3 pb-2 pt-1 border-t border-slate-700 text-xs space-y-1">
+          <div class="text-slate-400">{@full_card.type_line}</div>
+          <%= if @full_card.oracle_text do %>
+            <div class="text-slate-300 whitespace-pre-wrap">{@full_card.oracle_text}</div>
+          <% end %>
+          <%= if @full_card.prices["usd"] do %>
+            <div class="text-green-400">${@full_card.prices["usd"]}</div>
+          <% end %>
+        </div>
+      <% end %>
+    </details>
     """
   end
 
@@ -616,4 +727,36 @@ defmodule MtgDeckBuilderWeb.DeckLive do
 
   defp format_mana_cost(nil), do: ""
   defp format_mana_cost(cost), do: cost
+
+  defp staging_reason("Staged for later"), do: "staged"
+  defp staging_reason(reason), do: reason
+
+  # Card type ordering for display
+  @type_order ["Creature", "Planeswalker", "Instant", "Sorcery", "Artifact", "Enchantment", "Land", "Other"]
+
+  defp group_cards_by_type(cards) do
+    cards
+    |> Enum.group_by(&get_primary_type/1)
+    |> Enum.sort_by(fn {type, _} -> Enum.find_index(@type_order, &(&1 == type)) || 99 end)
+  end
+
+  defp get_primary_type(card) do
+    type_line = card.type_line || ""
+    type_lower = String.downcase(type_line)
+
+    cond do
+      String.contains?(type_lower, "creature") -> "Creature"
+      String.contains?(type_lower, "planeswalker") -> "Planeswalker"
+      String.contains?(type_lower, "instant") -> "Instant"
+      String.contains?(type_lower, "sorcery") -> "Sorcery"
+      String.contains?(type_lower, "artifact") -> "Artifact"
+      String.contains?(type_lower, "enchantment") -> "Enchantment"
+      String.contains?(type_lower, "land") -> "Land"
+      true -> "Other"
+    end
+  end
+
+  defp type_count(cards) do
+    Enum.reduce(cards, 0, fn card, acc -> acc + card.quantity end)
+  end
 end

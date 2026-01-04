@@ -180,6 +180,46 @@ defmodule MtgDeckBuilder.Decks do
   end
 
   @doc """
+  Moves a card from mainboard/sideboard to the staging area.
+  """
+  def move_to_staging(%Deck{} = deck, scryfall_id, from_board, reason \\ "Staged for later")
+      when from_board in [:mainboard, :sideboard] do
+    from_list = Map.get(deck, from_board)
+
+    case Enum.find(from_list, fn c -> c.scryfall_id == scryfall_id end) do
+      nil ->
+        {:error, "Card not found in #{from_board}"}
+
+      card ->
+        # Create a RemovedCard (staging card) from the deck card
+        staged_card = RemovedCard.from_deck_card(card, reason, from_board)
+
+        # Remove from source board
+        updated_from = Enum.reject(from_list, fn c -> c.scryfall_id == scryfall_id end)
+
+        # Add to staging area (check if already exists)
+        updated_removed =
+          case Enum.find_index(deck.removed_cards, fn c -> c.scryfall_id == scryfall_id end) do
+            nil ->
+              [staged_card | deck.removed_cards]
+
+            index ->
+              List.update_at(deck.removed_cards, index, fn existing ->
+                %{existing | quantity: existing.quantity + card.quantity}
+              end)
+          end
+
+        updated_deck =
+          deck
+          |> Map.put(from_board, updated_from)
+          |> Map.put(:removed_cards, updated_removed)
+          |> Map.put(:updated_at, DateTime.utc_now() |> DateTime.to_iso8601())
+
+        {:ok, updated_deck}
+    end
+  end
+
+  @doc """
   Moves illegal cards to the removed_cards list when format changes.
   Returns `{updated_deck, count_moved}`.
   """
@@ -219,54 +259,65 @@ defmodule MtgDeckBuilder.Decks do
   end
 
   @doc """
-  Restores a removed card to the specified board if it's legal in the current format.
+  Restores a card from the staging area to the specified board.
+  Cards can be restored even if not legal in the current format (user can decide).
   """
   def restore_card(%Deck{} = deck, scryfall_id, to_board) when to_board in [:mainboard, :sideboard] do
     case Enum.find(deck.removed_cards, fn c -> c.scryfall_id == scryfall_id end) do
       nil ->
-        {:error, "Card not found in removed cards"}
+        {:error, "Card not found in staging area"}
 
       removed_card ->
-        # Check if card is now legal
-        case Cards.get_by_scryfall_id(scryfall_id) do
-          nil ->
-            {:error, "Card not found"}
+        # Create DeckCard from staged card
+        deck_card = %DeckCard{
+          scryfall_id: removed_card.scryfall_id,
+          name: removed_card.name,
+          quantity: removed_card.quantity,
+          mana_cost: removed_card.mana_cost,
+          cmc: removed_card.cmc,
+          type_line: removed_card.type_line,
+          oracle_text: removed_card.oracle_text,
+          colors: removed_card.colors,
+          price: removed_card.price,
+          is_basic_land: removed_card.is_basic_land
+        }
 
-          card ->
-            if Validator.legal_in_format?(card, deck.format) do
-              # Create DeckCard from removed card
-              deck_card = %DeckCard{
-                scryfall_id: removed_card.scryfall_id,
-                name: removed_card.name,
-                quantity: removed_card.quantity,
-                mana_cost: removed_card.mana_cost,
-                cmc: removed_card.cmc,
-                type_line: removed_card.type_line,
-                colors: removed_card.colors,
-                price: removed_card.price,
-                is_basic_land: removed_card.is_basic_land
-              }
+        # Remove from staging area
+        new_removed = Enum.reject(deck.removed_cards, fn c -> c.scryfall_id == scryfall_id end)
 
-              # Remove from removed_cards
-              new_removed = Enum.reject(deck.removed_cards, fn c -> c.scryfall_id == scryfall_id end)
+        # Add to target board (merge if exists)
+        board_list = Map.get(deck, to_board)
 
-              # Add to target board
-              board_list = Map.get(deck, to_board)
-              new_board_list = [deck_card | board_list] |> Enum.sort_by(& &1.name)
+        new_board_list =
+          case Enum.find_index(board_list, fn c -> c.scryfall_id == scryfall_id end) do
+            nil ->
+              [deck_card | board_list]
 
-              updated_deck =
-                deck
-                |> Map.put(:removed_cards, new_removed)
-                |> Map.put(to_board, new_board_list)
-                |> Map.put(:updated_at, DateTime.utc_now() |> DateTime.to_iso8601())
+            index ->
+              List.update_at(board_list, index, fn existing ->
+                %{existing | quantity: existing.quantity + deck_card.quantity}
+              end)
+          end
+          |> Enum.sort_by(& &1.name)
 
-              {:ok, updated_deck}
-            else
-              format_key = Atom.to_string(deck.format)
-              legality = get_in(card.legalities, [format_key])
-              {:error, "Card is #{legality || "not legal"} in #{deck.format}"}
-            end
-        end
+        updated_deck =
+          deck
+          |> Map.put(:removed_cards, new_removed)
+          |> Map.put(to_board, new_board_list)
+          |> Map.put(:updated_at, DateTime.utc_now() |> DateTime.to_iso8601())
+
+        {:ok, updated_deck}
     end
+  end
+
+  @doc """
+  Removes a card from the staging area completely.
+  """
+  def remove_from_staging(%Deck{} = deck, scryfall_id) do
+    new_removed = Enum.reject(deck.removed_cards, fn c -> c.scryfall_id == scryfall_id end)
+
+    deck
+    |> Map.put(:removed_cards, new_removed)
+    |> Map.put(:updated_at, DateTime.utc_now() |> DateTime.to_iso8601())
   end
 end
