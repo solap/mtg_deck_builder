@@ -5,8 +5,8 @@ defmodule MtgDeckBuilder.Cards do
   """
 
   import Ecto.Query
-  alias MtgDeckBuilder.Repo
   alias MtgDeckBuilder.Cards.Card
+  alias MtgDeckBuilder.Repo
 
   @doc """
   Search for cards by name with optional format filtering.

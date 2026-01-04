@@ -64,8 +64,8 @@ This task list implements the MTG Deck Builder MVP with bulk data architecture (
 - [X] T022 Implement Cards.search/2 with ILIKE query on name, optional format filter, limit 50 results
 - [X] T023 Implement Cards.get_by_scryfall_id/1 for single card lookup
 - [X] T024 Implement Cards.count/0 to verify import success
-- [ ] T025 [P] Create test/mtg_deck_builder/cards/cards_test.exs with search and lookup tests
-- [ ] T026 [P] Create test/mtg_deck_builder/cards/bulk_importer_test.exs with transform_card tests
+- [X] T025 [P] Create test/mtg_deck_builder/cards/cards_test.exs with search and lookup tests
+- [X] T026 [P] Create test/mtg_deck_builder/cards/bulk_importer_test.exs with transform_card tests
 
 **Acceptance:**
 ```bash
@@ -92,7 +92,7 @@ iex> MtgDeckBuilder.Cards.search("lightning bolt")
 - [X] T032 [US1] Implement handle_event("search_cards", %{"query" => query}, socket) in deck_live.ex
 - [X] T033 [US1] Create lib/mtg_deck_builder_web/components/card_component.ex for text-only card display
 - [X] T034 [US1] Implement card_component to show: name, mana cost (formatted), type line, oracle text (truncated), price
-- [ ] T035 [US1] Add expandable card detail on click (shows full oracle text, all legalities)
+- [X] T035 [US1] Add expandable card detail on click (shows full oracle text, all legalities)
 - [X] T036 [US1] Display "No cards found" message when search returns empty
 - [X] T037 [US1] Display loading indicator during search in deck_live.html.heex
 - [X] T038 [US1] Update router.ex to route "/" to DeckLive (replace HomeLive)
@@ -237,21 +237,21 @@ iex> MtgDeckBuilder.Cards.search("lightning bolt")
 **Test:** `mix cards.sync` detects and applies legality changes
 **Dependencies:** All previous phases complete
 
-- [ ] T109 Create lib/mtg_deck_builder/cards/bulk_sync.ex module
-- [ ] T110 Implement BulkSync.sync/0 that downloads fresh bulk data
-- [ ] T111 Implement BulkSync.diff_and_update/1 comparing bulk data to DB, updating changed cards only
-- [ ] T112 Implement BulkSync.detect_legality_changes/2 returning list of cards with changed legalities
-- [ ] T113 Create lib/mix/tasks/cards.sync.ex mix task with summary output
-- [ ] T114 Add comprehensive error handling for bulk download failures in bulk_importer.ex
-- [ ] T115 Add retry logic (max 3 attempts) for failed downloads
-- [ ] T116 Add loading skeleton UI for search results in deck_live.html.heex
-- [ ] T117 Add empty state messaging for deck lists ("No cards yet - search and add some!")
-- [ ] T118 Add keyboard shortcut: Enter in search input triggers search
-- [ ] T119 Add keyboard shortcut: Escape clears search
-- [ ] T120 Verify CSS works in Chrome, Firefox, Safari, Edge
+- [X] T109 Create lib/mtg_deck_builder/cards/bulk_sync.ex module
+- [X] T110 Implement BulkSync.sync/0 that downloads fresh bulk data
+- [X] T111 Implement BulkSync.diff_and_update/1 comparing bulk data to DB, updating changed cards only
+- [X] T112 Implement BulkSync.detect_legality_changes/2 returning list of cards with changed legalities
+- [X] T113 Create lib/mix/tasks/cards.sync.ex mix task with summary output
+- [X] T114 Add comprehensive error handling for bulk download failures in bulk_importer.ex
+- [X] T115 Add retry logic (max 3 attempts) for failed downloads
+- [X] T116 Add loading skeleton UI for search results in deck_live.html.heex
+- [X] T117 Add empty state messaging for deck lists ("No cards yet - search and add some!")
+- [X] T118 Add keyboard shortcut: Enter in search input triggers search
+- [X] T119 Add keyboard shortcut: Escape clears search
+- [X] T120 Verify CSS works in Chrome, Firefox, Safari, Edge
 - [X] T121 Update README.md with setup instructions (mix cards.import, etc.)
-- [ ] T122 Run `mix credo --strict` and fix all warnings
-- [ ] T123 Run `mix dialyzer` and fix all type issues
+- [X] T122 Run `mix credo --strict` and fix all warnings
+- [X] T123 Run `mix dialyzer` and fix all type issues
 
 **Acceptance:**
 ```bash

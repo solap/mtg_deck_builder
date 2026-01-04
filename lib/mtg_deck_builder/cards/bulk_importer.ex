@@ -10,6 +10,8 @@ defmodule MtgDeckBuilder.Cards.BulkImporter do
 
   @scryfall_bulk_api "https://api.scryfall.com/bulk-data"
   @batch_size 1000
+  @max_retries 3
+  @retry_delay_ms 2000
 
   defp client do
     Tesla.client([
@@ -60,6 +62,7 @@ defmodule MtgDeckBuilder.Cards.BulkImporter do
 
   @doc """
   Downloads the bulk data file to a temporary location.
+  Includes retry logic for transient failures (max 3 attempts).
 
   Returns `{:ok, file_path}` or `{:error, reason}`.
   """
@@ -68,9 +71,25 @@ defmodule MtgDeckBuilder.Cards.BulkImporter do
 
     Logger.info("Downloading bulk data from #{url}")
 
+    download_with_retry(url, temp_file, progress_callback, 1)
+  end
+
+  defp download_with_retry(url, temp_file, progress_callback, attempt) when attempt <= @max_retries do
     case download_with_progress(url, temp_file, progress_callback) do
-      :ok -> {:ok, temp_file}
-      {:error, reason} -> {:error, reason}
+      :ok ->
+        {:ok, temp_file}
+
+      {:error, reason} = error ->
+        if attempt < @max_retries do
+          Logger.warning("Download attempt #{attempt} failed: #{reason}. Retrying in #{@retry_delay_ms}ms...")
+          Process.sleep(@retry_delay_ms)
+          # Clean up partial file if it exists
+          File.rm(temp_file)
+          download_with_retry(url, temp_file, progress_callback, attempt + 1)
+        else
+          Logger.error("Download failed after #{@max_retries} attempts: #{reason}")
+          error
+        end
     end
   end
 

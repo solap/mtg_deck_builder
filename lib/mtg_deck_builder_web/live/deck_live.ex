@@ -27,6 +27,16 @@ defmodule MtgDeckBuilderWeb.DeckLive do
     {:noreply, assign(socket, search_results: [], search_query: query)}
   end
 
+  def handle_event("clear_search", _params, socket) do
+    {:noreply, assign(socket, search_results: [], search_query: "")}
+  end
+
+  def handle_event("keydown", %{"key" => "Escape"}, socket) do
+    {:noreply, assign(socket, search_results: [], search_query: "")}
+  end
+
+  def handle_event("keydown", _params, socket), do: {:noreply, socket}
+
   def handle_event("search_cards", %{"query" => query}, socket) do
     format = socket.assigns.format
     results = Cards.search(query, format: format, limit: 50)
@@ -306,7 +316,7 @@ defmodule MtgDeckBuilderWeb.DeckLive do
   @impl true
   def render(assigns) do
     ~H"""
-    <div id="deck-container" phx-hook="DeckStorage" class="px-4 py-6">
+    <div id="deck-container" phx-hook="DeckStorage" phx-window-keydown="keydown" class="px-4 py-6">
       <div class="flex flex-col lg:flex-row gap-6">
         <!-- Search Panel -->
         <div class="w-full lg:w-80 xl:w-96 flex-shrink-0">
@@ -343,8 +353,22 @@ defmodule MtgDeckBuilderWeb.DeckLive do
             <!-- Search Results -->
             <div class="space-y-2 max-h-[60vh] overflow-y-auto">
               <%= if @search_loading do %>
-                <div class="text-center py-4 text-slate-400">
-                  <span class="animate-pulse">Searching...</span>
+                <!-- Loading Skeleton -->
+                <div class="space-y-2">
+                  <%= for _i <- 1..5 do %>
+                    <div class="bg-slate-700 rounded-lg p-3 animate-pulse">
+                      <div class="flex items-start justify-between">
+                        <div class="flex-1">
+                          <div class="h-4 bg-slate-600 rounded w-3/4 mb-2"></div>
+                          <div class="h-3 bg-slate-600 rounded w-1/2"></div>
+                        </div>
+                        <div class="flex flex-col gap-1 ml-2">
+                          <div class="h-6 w-12 bg-slate-600 rounded"></div>
+                          <div class="h-6 w-12 bg-slate-600 rounded"></div>
+                        </div>
+                      </div>
+                    </div>
+                  <% end %>
                 </div>
               <% end %>
 
@@ -626,6 +650,19 @@ defmodule MtgDeckBuilderWeb.DeckLive do
           <%= if @card.set_code do %>
             <div>Set: <span class="text-slate-400 uppercase">{@card.set_code}</span></div>
           <% end %>
+          <%= if @card.legalities && map_size(@card.legalities) > 0 do %>
+            <div class="mt-2 pt-2 border-t border-slate-600">
+              <div class="font-medium text-slate-400 mb-1">Legalities:</div>
+              <div class="grid grid-cols-2 gap-x-4 gap-y-0.5">
+                <%= for {format, status} <- Enum.sort(@card.legalities) do %>
+                  <div class="flex justify-between">
+                    <span class="capitalize">{format}</span>
+                    <span class={legality_class(status)}>{status}</span>
+                  </div>
+                <% end %>
+              </div>
+            </div>
+          <% end %>
         </div>
       </div>
     </details>
@@ -854,6 +891,12 @@ defmodule MtgDeckBuilderWeb.DeckLive do
 
   defp format_mana_cost(nil), do: ""
   defp format_mana_cost(cost), do: cost
+
+  defp legality_class("legal"), do: "text-green-400"
+  defp legality_class("not_legal"), do: "text-red-400"
+  defp legality_class("banned"), do: "text-red-500 font-medium"
+  defp legality_class("restricted"), do: "text-yellow-400"
+  defp legality_class(_), do: "text-slate-400"
 
   defp staging_reason("Staged for later"), do: "staged"
   defp staging_reason(reason), do: reason
