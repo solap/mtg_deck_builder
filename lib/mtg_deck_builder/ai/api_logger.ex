@@ -34,7 +34,12 @@ defmodule MtgDeckBuilder.AI.ApiLogger do
   end
 
   @doc """
-  Calculates estimated cost in cents based on provider and token counts.
+  Calculates estimated cost in micro-dollars (1/1,000,000 of a dollar) for precision.
+
+  The value stored is: input_tokens * input_rate + output_tokens * output_rate
+  where rates are in $/1M tokens. This gives micro-dollars.
+
+  To convert to dollars for display: divide by 1,000,000
 
   ## Pricing (as of 2024):
     - Claude 3 Haiku: $0.25/1M input, $1.25/1M output
@@ -55,11 +60,11 @@ defmodule MtgDeckBuilder.AI.ApiLogger do
         true -> {0.25, 1.25}
       end
 
-    # Cost in cents (rates are per 1M tokens, so divide by 1M and multiply by 100 for cents)
-    input_cost = input_tokens * input_rate / 1_000_000 * 100
-    output_cost = output_tokens * output_rate / 1_000_000 * 100
+    # Micro-dollars = tokens * rate (since rate is $/1M tokens, result is in 1/1M dollars)
+    input_cost = input_tokens * input_rate
+    output_cost = output_tokens * output_rate
 
-    trunc(input_cost + output_cost)
+    round(input_cost + output_cost)
   end
 
   def calculate_cost(%{provider: "openai", model: model} = attrs) do
@@ -73,10 +78,10 @@ defmodule MtgDeckBuilder.AI.ApiLogger do
         true -> {0.50, 1.50}
       end
 
-    input_cost = input_tokens * input_rate / 1_000_000 * 100
-    output_cost = output_tokens * output_rate / 1_000_000 * 100
+    input_cost = input_tokens * input_rate
+    output_cost = output_tokens * output_rate
 
-    trunc(input_cost + output_cost)
+    round(input_cost + output_cost)
   end
 
   def calculate_cost(%{provider: "xai"} = attrs) do
@@ -84,10 +89,10 @@ defmodule MtgDeckBuilder.AI.ApiLogger do
     output_tokens = attrs[:output_tokens] || 0
 
     # xAI Grok pricing (estimated)
-    input_cost = input_tokens * 5.0 / 1_000_000 * 100
-    output_cost = output_tokens * 15.0 / 1_000_000 * 100
+    input_cost = input_tokens * 5.0
+    output_cost = output_tokens * 15.0
 
-    trunc(input_cost + output_cost)
+    round(input_cost + output_cost)
   end
 
   def calculate_cost(_), do: 0

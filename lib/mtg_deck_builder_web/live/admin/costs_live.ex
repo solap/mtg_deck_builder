@@ -273,9 +273,16 @@ defmodule MtgDeckBuilderWeb.Admin.CostsLive do
     """
   end
 
-  defp format_cost(cents) when is_integer(cents) do
-    dollars = cents / 100
-    "$#{:erlang.float_to_binary(dollars, decimals: 2)}"
+  # Cost is stored in micro-dollars (1/1,000,000 of a dollar)
+  defp format_cost(micro_dollars) when is_integer(micro_dollars) do
+    dollars = micro_dollars / 1_000_000
+
+    if dollars < 0.01 and dollars > 0 do
+      # Show more precision for very small amounts
+      "$#{:erlang.float_to_binary(dollars, decimals: 6)}"
+    else
+      "$#{:erlang.float_to_binary(dollars, decimals: 2)}"
+    end
   end
 
   defp format_cost(_), do: "$0.00"
