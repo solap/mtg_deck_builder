@@ -23,9 +23,11 @@ defmodule MtgDeckBuilder.Cards.CardSyncWorker do
   use GenServer
   require Logger
 
-  alias MtgDeckBuilder.Cards.BulkImporter
+  alias MtgDeckBuilder.Cards.CopyImporter
 
   @default_interval_hours 24
+  # Delay initial sync to let app fully start
+  @initial_sync_delay_ms 30_000
 
   def start_link(opts) do
     GenServer.start_link(__MODULE__, opts, name: __MODULE__)
@@ -65,13 +67,19 @@ defmodule MtgDeckBuilder.Cards.CardSyncWorker do
     # Check if we have cards already
     card_count = MtgDeckBuilder.Repo.aggregate(MtgDeckBuilder.Cards.Card, :count)
 
-    if enabled and card_count > 0 do
-      # Only auto-sync if we already have cards (incremental updates)
-      schedule_sync(interval_ms)
-      Logger.info("CardSyncWorker started, next sync in #{interval_hours} hours (#{card_count} cards in DB)")
+    if enabled do
+      if card_count == 0 do
+        # No cards - schedule initial import after a short delay
+        # (using COPY protocol, this is now fast enough for production)
+        Process.send_after(self(), :initial_sync, @initial_sync_delay_ms)
+        Logger.info("CardSyncWorker started - initial import scheduled in #{div(@initial_sync_delay_ms, 1000)}s")
+      else
+        # Have cards - schedule regular sync
+        schedule_sync(interval_ms)
+        Logger.info("CardSyncWorker started, next sync in #{interval_hours} hours (#{card_count} cards in DB)")
+      end
     else
-      # Skip auto-sync for initial import - too heavy for free tier
-      Logger.info("CardSyncWorker started - auto-sync disabled (#{card_count} cards in DB, use manual import)")
+      Logger.info("CardSyncWorker started - sync disabled (#{card_count} cards in DB)")
     end
 
     {:ok, state}
@@ -95,7 +103,7 @@ defmodule MtgDeckBuilder.Cards.CardSyncWorker do
   @impl true
   def handle_info(:sync, state) do
     if state.enabled and not state.syncing do
-      state = do_sync(state)
+      state = do_sync(state, clear_first: false)
       schedule_sync(state.interval_ms)
       {:noreply, state}
     else
@@ -104,6 +112,17 @@ defmodule MtgDeckBuilder.Cards.CardSyncWorker do
     end
   end
 
+  def handle_info(:initial_sync, state) do
+    if not state.syncing do
+      Logger.info("Starting initial card import...")
+      state = do_sync(state, clear_first: true)
+      {:noreply, state}
+    else
+      {:noreply, state}
+    end
+  end
+
+  @impl true
   def handle_info({:sync_complete, result}, state) do
     now = DateTime.utc_now()
 
@@ -111,10 +130,14 @@ defmodule MtgDeckBuilder.Cards.CardSyncWorker do
       case result do
         {:ok, count} ->
           Logger.info("Card sync completed: #{count} cards imported")
+          # Schedule next sync
+          schedule_sync(state.interval_ms)
           %{state | syncing: false, last_sync: now, last_sync_result: {:ok, count}}
 
         {:error, reason} ->
           Logger.error("Card sync failed: #{inspect(reason)}")
+          # Retry in 1 hour on failure
+          Process.send_after(self(), :sync, 60 * 60 * 1000)
           %{state | syncing: false, last_sync: now, last_sync_result: {:error, reason}}
       end
 
@@ -127,13 +150,17 @@ defmodule MtgDeckBuilder.Cards.CardSyncWorker do
     Process.send_after(self(), :sync, interval_ms)
   end
 
-  defp do_sync(state) do
-    Logger.info("Starting card data sync from Scryfall...")
+  defp do_sync(state, opts \\ []) do
+    Logger.info("Starting card data sync from Scryfall (using COPY protocol)...")
     parent = self()
+    clear_first = Keyword.get(opts, :clear_first, true)
 
     # Run sync in a separate process to not block the GenServer
     Task.start(fn ->
-      result = BulkImporter.import(&sync_progress/2)
+      result = CopyImporter.import(
+        clear_first: clear_first,
+        progress_callback: &sync_progress/2
+      )
       send(parent, {:sync_complete, result})
     end)
 

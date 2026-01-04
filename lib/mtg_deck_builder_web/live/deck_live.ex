@@ -7,6 +7,8 @@ defmodule MtgDeckBuilderWeb.DeckLive do
   alias MtgDeckBuilder.AI.AnthropicClient
   alias MtgDeckBuilder.Chat.{CommandExecutor, CardResolver, ResponseFormatter, UndoServer}
 
+  require Logger
+
   @impl true
   def mount(params, _session, socket) do
     {deck, format, flash_msg} =
@@ -66,6 +68,7 @@ defmodule MtgDeckBuilderWeb.DeckLive do
   def handle_event("search_cards", %{"query" => query}, socket) do
     format = socket.assigns.format
     results = Cards.search(query, format: format, limit: 50)
+    Logger.info("Search: query=#{inspect(query)} format=#{format} results=#{length(results)}")
 
     {:noreply,
      socket
