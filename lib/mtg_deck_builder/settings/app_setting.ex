@@ -6,6 +6,15 @@ defmodule MtgDeckBuilder.Settings.AppSetting do
   use Ecto.Schema
   import Ecto.Changeset
 
+  @type t :: %__MODULE__{
+          id: integer(),
+          key: String.t() | nil,
+          value: String.t() | nil,
+          encrypted: boolean(),
+          inserted_at: NaiveDateTime.t(),
+          updated_at: NaiveDateTime.t()
+        }
+
   schema "app_settings" do
     field :key, :string
     field :value, :string

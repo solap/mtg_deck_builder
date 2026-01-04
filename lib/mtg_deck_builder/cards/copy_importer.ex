@@ -94,7 +94,7 @@ defmodule MtgDeckBuilder.Cards.CopyImporter do
         # Stream JSON file, transform to CSV rows, and pipe to COPY
         csv_stream =
           file_path
-          |> File.stream!([], 65_536)
+          |> File.stream!(65_536)
           |> Jaxon.Stream.from_enumerable()
           |> Jaxon.Stream.query([:root, :all])
           |> Stream.with_index(1)

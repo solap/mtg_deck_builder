@@ -61,8 +61,8 @@ This task list implements AI-powered chat commands for the MTG Deck Builder, ena
 - [X] T016 Implement AnthropicClient response parsing to extract tool_use input as ParsedCommand
 - [X] T017 Implement AnthropicClient error handling for 400, 401, 429, 500, 529 responses
 - [X] T018 Integrate ApiLogger.log_request/1 call after each Anthropic API call in AnthropicClient
-- [ ] T019 [P] Create test/mtg_deck_builder/ai/parsed_command_test.exs with validation tests
-- [ ] T020 [P] Create test/mtg_deck_builder/ai/anthropic_client_test.exs with mocked API responses
+- [X] T019 [P] Create test/mtg_deck_builder/ai/parsed_command_test.exs with validation tests
+- [X] T020 [P] Create test/mtg_deck_builder/ai/anthropic_client_test.exs with mocked API responses
 
 **Acceptance:**
 ```elixir
@@ -252,10 +252,10 @@ iex> Repo.aggregate(ApiUsageLog, :count)
 - [X] T101 Handle edge case: card not legal in current format
 - [X] T102 Handle edge case: restricted card in Vintage (1-copy max)
 - [X] T103 Add comprehensive error messages per error codes in contracts/api.md
-- [ ] T104 Run `mix credo --strict` and fix all warnings
-- [ ] T105 Run `mix dialyzer` and fix all type issues
-- [ ] T106 Verify chat works in Chrome, Firefox, Safari, Edge
-- [ ] T107 Update README.md with chat command examples
+- [X] T104 Run `mix credo --strict` and fix all warnings
+- [X] T105 Run `mix dialyzer` and fix all type issues
+- [X] T106 Verify chat works in Chrome, Firefox, Safari, Edge
+- [X] T107 Update README.md with chat command examples
 
 **Acceptance:** All edge cases handled gracefully, code quality passes
 

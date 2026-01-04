@@ -7,6 +7,26 @@ defmodule MtgDeckBuilder.Cards.Card do
   use Ecto.Schema
   import Ecto.Changeset
 
+  @type t :: %__MODULE__{
+          id: binary(),
+          scryfall_id: String.t() | nil,
+          oracle_id: String.t() | nil,
+          name: String.t() | nil,
+          mana_cost: String.t() | nil,
+          cmc: float() | nil,
+          type_line: String.t() | nil,
+          oracle_text: String.t() | nil,
+          colors: [String.t()],
+          color_identity: [String.t()],
+          legalities: map(),
+          prices: map(),
+          is_basic_land: boolean(),
+          rarity: String.t() | nil,
+          set_code: String.t() | nil,
+          inserted_at: NaiveDateTime.t(),
+          updated_at: NaiveDateTime.t()
+        }
+
   @primary_key {:id, :binary_id, autogenerate: true}
   @foreign_key_type :binary_id
 

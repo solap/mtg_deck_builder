@@ -14,6 +14,56 @@ A Magic: The Gathering deck building application built with Phoenix LiveView.
 - **Local Persistence**: Deck state saved to browser localStorage
 - **AI Chat Commands**: Natural language deck building (e.g., "add 4 lightning bolt")
 
+## AI Chat Commands
+
+The deck builder supports natural language commands for quick deck editing. Just type in the chat input:
+
+### Adding Cards
+```
+add 4 lightning bolt           # Add 4 to mainboard
+add 2 counterspell to sideboard
+add AOTG                       # Acronyms work too (Anger of the Gods)
+```
+
+### Removing Cards
+```
+remove lightning bolt          # Remove all copies
+remove 2 lightning bolt        # Remove 2 copies
+remove counterspell from sideboard
+```
+
+### Updating Quantities
+```
+set lightning bolt to 3        # Set exact quantity
+add 1 more lightning bolt      # Increment by 1
+```
+
+### Moving Cards
+```
+move 2 lightning bolt to sideboard
+move counterspell to mainboard
+move all bolts to staging      # Staging area for cards being considered
+```
+
+### Querying Deck Status
+```
+how many lightning bolt        # Check card count
+show mainboard                 # List mainboard cards
+deck status                    # Overall deck summary
+```
+
+### Other Commands
+```
+undo                          # Undo last chat action
+help                          # Show available commands
+```
+
+### Tips
+- Card names are fuzzy-matched (typos are OK)
+- Common MTG acronyms are recognized (BBE, SFM, JtMS, etc.)
+- Default board is mainboard, default quantity is 1
+- Use "/" keyboard shortcut to focus chat input
+
 ## Setup
 
 ### Prerequisites
