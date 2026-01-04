@@ -1,0 +1,619 @@
+defmodule MtgDeckBuilderWeb.DeckLive do
+  use MtgDeckBuilderWeb, :live_view
+
+  alias MtgDeckBuilder.Cards
+  alias MtgDeckBuilder.Decks
+  alias MtgDeckBuilder.Decks.{Deck, Stats}
+
+  @impl true
+  def mount(_params, _session, socket) do
+    deck = Deck.new(:modern)
+
+    {:ok,
+     socket
+     |> assign(:search_query, "")
+     |> assign(:search_results, [])
+     |> assign(:search_loading, false)
+     |> assign(:format, :modern)
+     |> assign(:deck, deck)
+     |> assign(:stats, Stats.calculate(deck))
+     |> assign(:page_title, "Deck Editor")}
+  end
+
+  @impl true
+  def handle_event("search_cards", %{"query" => query}, socket) when byte_size(query) < 2 do
+    {:noreply, assign(socket, search_results: [], search_query: query)}
+  end
+
+  def handle_event("search_cards", %{"query" => query}, socket) do
+    format = socket.assigns.format
+    results = Cards.search(query, format: format, limit: 50)
+
+    {:noreply,
+     socket
+     |> assign(:search_query, query)
+     |> assign(:search_results, results)
+     |> assign(:search_loading, false)}
+  end
+
+  def handle_event("change_format", params, socket) do
+    format = params["format"]
+    format_atom = String.to_existing_atom(format)
+
+    # Re-run search with new format if there's a query
+    socket =
+      if socket.assigns.search_query != "" do
+        results = Cards.search(socket.assigns.search_query, format: format_atom, limit: 50)
+        assign(socket, :search_results, results)
+      else
+        socket
+      end
+
+    # Move illegal cards to removed
+    {updated_deck, count_moved} = Decks.move_illegal_to_removed(socket.assigns.deck, format_atom)
+
+    socket =
+      if count_moved > 0 do
+        put_flash(socket, :info, "#{count_moved} card(s) moved to Removed Cards (not legal in #{format})")
+      else
+        socket
+      end
+
+    {:noreply,
+     socket
+     |> assign(:format, format_atom)
+     |> assign(:deck, updated_deck)
+     |> sync_deck()}
+  end
+
+  def handle_event("restore_card", %{"scryfall_id" => scryfall_id, "board" => board}, socket) do
+    board_atom = String.to_existing_atom(board)
+
+    case Decks.restore_card(socket.assigns.deck, scryfall_id, board_atom) do
+      {:ok, updated_deck} ->
+        {:noreply, socket |> assign(:deck, updated_deck) |> sync_deck()}
+
+      {:error, reason} ->
+        {:noreply, put_flash(socket, :error, reason)}
+    end
+  end
+
+  def handle_event("add_card", %{"scryfall_id" => scryfall_id, "board" => board}, socket) do
+    board_atom = String.to_existing_atom(board)
+    deck = socket.assigns.deck
+
+    case Decks.add_card(deck, scryfall_id, board_atom, 1) do
+      {:ok, updated_deck} ->
+        {:noreply, socket |> assign(:deck, updated_deck) |> sync_deck()}
+
+      {:error, reason} ->
+        {:noreply, put_flash(socket, :error, reason)}
+    end
+  end
+
+  def handle_event("remove_card", %{"scryfall_id" => scryfall_id, "board" => board}, socket) do
+    board_atom = String.to_existing_atom(board)
+    updated_deck = Decks.remove_card(socket.assigns.deck, scryfall_id, board_atom)
+    {:noreply, socket |> assign(:deck, updated_deck) |> sync_deck()}
+  end
+
+  def handle_event(
+        "update_quantity",
+        %{"scryfall_id" => scryfall_id, "board" => board, "delta" => delta},
+        socket
+      ) do
+    board_atom = String.to_existing_atom(board)
+    delta_int = String.to_integer(delta)
+
+    case Decks.update_quantity(socket.assigns.deck, scryfall_id, board_atom, delta_int) do
+      {:ok, updated_deck} ->
+        {:noreply, socket |> assign(:deck, updated_deck) |> sync_deck()}
+
+      {:error, reason} ->
+        {:noreply, put_flash(socket, :error, reason)}
+    end
+  end
+
+  def handle_event("move_card", %{"scryfall_id" => scryfall_id, "from" => from, "to" => to}, socket) do
+    from_atom = String.to_existing_atom(from)
+    to_atom = String.to_existing_atom(to)
+
+    case Decks.move_card(socket.assigns.deck, scryfall_id, from_atom, to_atom) do
+      {:ok, updated_deck} ->
+        {:noreply, socket |> assign(:deck, updated_deck) |> sync_deck()}
+
+      {:error, reason} ->
+        {:noreply, put_flash(socket, :error, reason)}
+    end
+  end
+
+  def handle_event("load_deck", %{"deck_json" => deck_json}, socket) when is_binary(deck_json) do
+    case Jason.decode(deck_json) do
+      {:ok, data} ->
+        deck = decode_deck(data)
+        format = deck.format
+
+        {:noreply,
+         socket
+         |> assign(:deck, deck)
+         |> assign(:format, format)
+         |> assign(:stats, Stats.calculate(deck))}
+
+      {:error, _} ->
+        {:noreply, socket}
+    end
+  end
+
+  def handle_event("load_deck", _params, socket), do: {:noreply, socket}
+
+  # Helper to sync deck to localStorage and recalculate stats
+  defp sync_deck(socket) do
+    deck = socket.assigns.deck
+    deck_json = Jason.encode!(deck)
+
+    socket
+    |> assign(:stats, Stats.calculate(deck))
+    |> push_event("sync_deck", %{deck_json: deck_json})
+  end
+
+  # Decode deck from JSON map to struct
+  defp decode_deck(data) when is_map(data) do
+    mainboard =
+      (data["mainboard"] || [])
+      |> Enum.map(&decode_deck_card/1)
+
+    sideboard =
+      (data["sideboard"] || [])
+      |> Enum.map(&decode_deck_card/1)
+
+    format =
+      case data["format"] do
+        f when is_binary(f) -> String.to_existing_atom(f)
+        f when is_atom(f) -> f
+        _ -> :modern
+      end
+
+    %Deck{
+      id: data["id"] || Ecto.UUID.generate(),
+      name: data["name"] || "New Deck",
+      format: format,
+      mainboard: mainboard,
+      sideboard: sideboard,
+      removed_cards: data["removed_cards"] || [],
+      created_at: data["created_at"],
+      updated_at: data["updated_at"]
+    }
+  end
+
+  defp decode_deck_card(data) when is_map(data) do
+    %MtgDeckBuilder.Decks.DeckCard{
+      scryfall_id: data["scryfall_id"],
+      name: data["name"],
+      quantity: data["quantity"] || 1,
+      mana_cost: data["mana_cost"],
+      cmc: data["cmc"] || 0.0,
+      type_line: data["type_line"],
+      oracle_text: data["oracle_text"],
+      colors: data["colors"] || [],
+      price: data["price"],
+      is_basic_land: data["is_basic_land"] || false
+    }
+  end
+
+  @impl true
+  def render(assigns) do
+    ~H"""
+    <div id="deck-container" phx-hook="DeckStorage" class="max-w-7xl mx-auto px-4 py-6">
+      <div class="grid grid-cols-1 lg:grid-cols-3 gap-6">
+        <!-- Search Panel -->
+        <div class="lg:col-span-1">
+          <div class="bg-slate-800 rounded-lg p-4 border border-slate-700">
+            <h2 class="text-lg font-semibold text-amber-400 mb-4">Card Search</h2>
+
+            <form phx-submit="search_cards" phx-change="search_cards" class="mb-4">
+              <input
+                type="text"
+                name="query"
+                value={@search_query}
+                placeholder="Search cards..."
+                autocomplete="off"
+                phx-debounce="300"
+                class="w-full bg-slate-700 border border-slate-600 rounded-lg px-4 py-2 text-slate-100 placeholder-slate-400 focus:outline-none focus:ring-2 focus:ring-amber-400 focus:border-transparent"
+              />
+            </form>
+
+            <form phx-change="change_format" class="mb-4">
+              <label class="block text-sm text-slate-400 mb-1">Format</label>
+              <select
+                name="format"
+                class="w-full bg-slate-700 border border-slate-600 rounded-lg px-3 py-2 text-slate-100 focus:outline-none focus:ring-2 focus:ring-amber-400"
+              >
+                <option value="modern" selected={@format == :modern}>Modern</option>
+                <option value="standard" selected={@format == :standard}>Standard</option>
+                <option value="pioneer" selected={@format == :pioneer}>Pioneer</option>
+                <option value="legacy" selected={@format == :legacy}>Legacy</option>
+                <option value="vintage" selected={@format == :vintage}>Vintage</option>
+                <option value="pauper" selected={@format == :pauper}>Pauper</option>
+              </select>
+            </form>
+
+            <!-- Search Results -->
+            <div class="space-y-2 max-h-[60vh] overflow-y-auto">
+              <%= if @search_loading do %>
+                <div class="text-center py-4 text-slate-400">
+                  <span class="animate-pulse">Searching...</span>
+                </div>
+              <% end %>
+
+              <%= if @search_query != "" and Enum.empty?(@search_results) and not @search_loading do %>
+                <div class="text-center py-4 text-slate-400">
+                  No cards found matching "{@search_query}"
+                </div>
+              <% end %>
+
+              <%= for card <- @search_results do %>
+                <.card_result card={card} />
+              <% end %>
+            </div>
+          </div>
+        </div>
+
+        <!-- Deck Panel -->
+        <div class="lg:col-span-2">
+          <div class="bg-slate-800 rounded-lg p-4 border border-slate-700">
+            <div class="flex items-center justify-between mb-4">
+              <h2 class="text-lg font-semibold text-amber-400">Deck List</h2>
+              <span class="text-sm text-slate-400 capitalize">{@format} Format</span>
+            </div>
+
+            <div class="grid grid-cols-1 md:grid-cols-2 gap-4">
+              <!-- Mainboard -->
+              <div>
+                <h3 class="text-sm font-medium text-slate-300 mb-2">
+                  Mainboard ({Deck.mainboard_count(@deck)} cards)
+                </h3>
+                <div class="bg-slate-900 rounded-lg p-3 min-h-[200px] max-h-[50vh] overflow-y-auto border border-slate-700">
+                  <%= if Enum.empty?(@deck.mainboard) do %>
+                    <p class="text-slate-500 text-sm text-center py-8">
+                      No cards yet - search and add some!
+                    </p>
+                  <% else %>
+                    <div class="space-y-1">
+                      <%= for card <- @deck.mainboard do %>
+                        <.deck_card card={card} board="mainboard" />
+                      <% end %>
+                    </div>
+                  <% end %>
+                </div>
+              </div>
+
+              <!-- Sideboard -->
+              <div>
+                <h3 class="text-sm font-medium text-slate-300 mb-2">
+                  Sideboard ({Deck.sideboard_count(@deck)}/15 cards)
+                </h3>
+                <div class="bg-slate-900 rounded-lg p-3 min-h-[200px] max-h-[50vh] overflow-y-auto border border-slate-700">
+                  <%= if Enum.empty?(@deck.sideboard) do %>
+                    <p class="text-slate-500 text-sm text-center py-8">
+                      Add cards to sideboard
+                    </p>
+                  <% else %>
+                    <div class="space-y-1">
+                      <%= for card <- @deck.sideboard do %>
+                        <.deck_card card={card} board="sideboard" />
+                      <% end %>
+                    </div>
+                  <% end %>
+                </div>
+              </div>
+            <!-- Removed Cards -->
+            <%= if not Enum.empty?(@deck.removed_cards) do %>
+              <div class="md:col-span-2 mt-4">
+                <h3 class="text-sm font-medium text-red-400 mb-2">
+                  Removed Cards ({length(@deck.removed_cards)})
+                </h3>
+                <div class="bg-red-900/20 rounded-lg p-3 border border-red-800">
+                  <div class="space-y-1">
+                    <%= for card <- @deck.removed_cards do %>
+                      <.removed_card card={card} format={@format} />
+                    <% end %>
+                  </div>
+                </div>
+              </div>
+            <% end %>
+            </div>
+
+            <!-- Statistics Panel -->
+            <div class="mt-4 pt-4 border-t border-slate-700">
+              <h3 class="text-sm font-medium text-amber-400 mb-3">Deck Statistics</h3>
+              <div class="grid grid-cols-2 md:grid-cols-4 gap-4">
+                <!-- Mana Curve -->
+                <div class="bg-slate-900 rounded-lg p-3 border border-slate-700">
+                  <h4 class="text-xs font-medium text-slate-400 mb-2">Mana Curve</h4>
+                  <div class="space-y-1">
+                    <%= for cmc <- [0, 1, 2, 3, 4, 5, "6+"] do %>
+                      <.mana_curve_bar cmc={cmc} count={@stats.mana_curve[cmc]} max={max_curve_count(@stats.mana_curve)} />
+                    <% end %>
+                  </div>
+                </div>
+
+                <!-- Color Distribution -->
+                <div class="bg-slate-900 rounded-lg p-3 border border-slate-700">
+                  <h4 class="text-xs font-medium text-slate-400 mb-2">Colors</h4>
+                  <div class="space-y-1 text-sm">
+                    <%= for {color, count} <- Enum.filter(@stats.color_distribution, fn {_, c} -> c > 0 end) do %>
+                      <div class="flex justify-between">
+                        <span class={color_class(color)}>{color_name(color)}</span>
+                        <span class="text-slate-300">{count}</span>
+                      </div>
+                    <% end %>
+                    <%= if Enum.all?(@stats.color_distribution, fn {_, c} -> c == 0 end) do %>
+                      <span class="text-slate-500 text-xs">No cards yet</span>
+                    <% end %>
+                  </div>
+                </div>
+
+                <!-- Type Breakdown -->
+                <div class="bg-slate-900 rounded-lg p-3 border border-slate-700">
+                  <h4 class="text-xs font-medium text-slate-400 mb-2">Card Types</h4>
+                  <div class="space-y-1 text-sm">
+                    <%= for {type, count} <- Enum.filter(@stats.type_breakdown, fn {_, c} -> c > 0 end) do %>
+                      <div class="flex justify-between">
+                        <span class="text-slate-300 capitalize">{type}</span>
+                        <span class="text-slate-300">{count}</span>
+                      </div>
+                    <% end %>
+                    <%= if Enum.all?(@stats.type_breakdown, fn {_, c} -> c == 0 end) do %>
+                      <span class="text-slate-500 text-xs">No cards yet</span>
+                    <% end %>
+                  </div>
+                </div>
+
+                <!-- Summary -->
+                <div class="bg-slate-900 rounded-lg p-3 border border-slate-700">
+                  <h4 class="text-xs font-medium text-slate-400 mb-2">Summary</h4>
+                  <div class="space-y-1 text-sm">
+                    <div class="flex justify-between">
+                      <span class="text-slate-400">Avg. MV</span>
+                      <span class="text-amber-400">{@stats.average_mana_value}</span>
+                    </div>
+                    <div class="flex justify-between">
+                      <span class="text-slate-400">Total Price</span>
+                      <span class="text-green-400">${Float.round(@stats.total_price, 2)}</span>
+                    </div>
+                  </div>
+                </div>
+              </div>
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+    """
+  end
+
+  attr :card, MtgDeckBuilder.Cards.Card, required: true
+
+  defp card_result(assigns) do
+    ~H"""
+    <div class="bg-slate-700 rounded-lg p-3 hover:bg-slate-600 transition-colors cursor-pointer group">
+      <div class="flex items-start justify-between">
+        <div class="flex-1 min-w-0">
+          <div class="flex items-center gap-2">
+            <span class="font-medium text-slate-100 truncate">{@card.name}</span>
+            <span class="text-amber-400 text-sm whitespace-nowrap">
+              {format_mana_cost(@card.mana_cost)}
+            </span>
+          </div>
+          <div class="text-xs text-slate-400 truncate">{@card.type_line}</div>
+          <%= if @card.oracle_text do %>
+            <div class="text-xs text-slate-300 mt-1 line-clamp-2">{@card.oracle_text}</div>
+          <% end %>
+          <%= if @card.prices["usd"] do %>
+            <div class="text-xs text-green-400 mt-1">${@card.prices["usd"]}</div>
+          <% end %>
+        </div>
+        <div class="flex flex-col gap-1 ml-2 opacity-0 group-hover:opacity-100 transition-opacity">
+          <button
+            type="button"
+            phx-click="add_card"
+            phx-value-scryfall_id={@card.scryfall_id}
+            phx-value-board="mainboard"
+            class="text-xs bg-amber-500 hover:bg-amber-600 text-slate-900 px-2 py-1 rounded font-medium"
+          >
+            +Main
+          </button>
+          <button
+            type="button"
+            phx-click="add_card"
+            phx-value-scryfall_id={@card.scryfall_id}
+            phx-value-board="sideboard"
+            class="text-xs bg-slate-500 hover:bg-slate-400 text-slate-100 px-2 py-1 rounded font-medium"
+          >
+            +Side
+          </button>
+        </div>
+      </div>
+    </div>
+    """
+  end
+
+  attr :card, :map, required: true
+  attr :board, :string, required: true
+
+  defp deck_card(assigns) do
+    ~H"""
+    <details class="bg-slate-800 rounded group">
+      <summary class="flex items-center justify-between px-2 py-1.5 cursor-pointer hover:bg-slate-700 rounded list-none">
+        <div class="flex items-center gap-2 min-w-0 flex-1">
+          <span class="text-amber-400 font-medium text-sm w-6">{@card.quantity}x</span>
+          <span class="text-slate-100 text-sm truncate">{@card.name}</span>
+          <span class="text-slate-400 text-xs whitespace-nowrap">{format_mana_cost(@card.mana_cost)}</span>
+        </div>
+        <div class="flex items-center gap-1">
+          <button
+            type="button"
+            phx-click="update_quantity"
+            phx-value-scryfall_id={@card.scryfall_id}
+            phx-value-board={@board}
+            phx-value-delta="-1"
+            class="text-slate-400 hover:text-red-400 px-1"
+          >
+            -
+          </button>
+          <button
+            type="button"
+            phx-click="update_quantity"
+            phx-value-scryfall_id={@card.scryfall_id}
+            phx-value-board={@board}
+            phx-value-delta="1"
+            class="text-slate-400 hover:text-green-400 px-1"
+          >
+            +
+          </button>
+          <button
+            type="button"
+            phx-click="move_card"
+            phx-value-scryfall_id={@card.scryfall_id}
+            phx-value-from={@board}
+            phx-value-to={if @board == "mainboard", do: "sideboard", else: "mainboard"}
+            class="text-slate-400 hover:text-amber-400 px-1 text-xs"
+            title={if @board == "mainboard", do: "Move to sideboard", else: "Move to mainboard"}
+          >
+            ↔
+          </button>
+          <button
+            type="button"
+            phx-click="remove_card"
+            phx-value-scryfall_id={@card.scryfall_id}
+            phx-value-board={@board}
+            class="text-slate-400 hover:text-red-400 px-1"
+          >
+            ×
+          </button>
+        </div>
+      </summary>
+      <div class="px-3 pb-2 pt-1 border-t border-slate-700 text-xs space-y-1">
+        <div class="text-slate-400">{@card.type_line}</div>
+        <%= if @card.oracle_text do %>
+          <div class="text-slate-300 whitespace-pre-wrap">{@card.oracle_text}</div>
+        <% end %>
+        <%= if @card.price do %>
+          <div class="text-green-400">${@card.price}</div>
+        <% end %>
+      </div>
+    </details>
+    """
+  end
+
+  attr :card, :map, required: true
+  attr :format, :atom, required: true
+
+  defp removed_card(assigns) do
+    # Check if card is now legal in current format
+    is_now_legal =
+      case MtgDeckBuilder.Cards.get_by_scryfall_id(assigns.card.scryfall_id) do
+        nil -> false
+        card -> MtgDeckBuilder.Decks.Validator.legal_in_format?(card, assigns.format)
+      end
+
+    assigns = assign(assigns, :is_now_legal, is_now_legal)
+
+    ~H"""
+    <div class={[
+      "flex items-center justify-between rounded px-2 py-1.5 group",
+      if(@is_now_legal, do: "bg-green-900/30 border border-green-700", else: "bg-slate-800")
+    ]}>
+      <div class="flex items-center gap-2 min-w-0 flex-1">
+        <span class="text-amber-400 font-medium text-sm w-6">{@card.quantity}x</span>
+        <span class="text-slate-100 text-sm truncate">{@card.name}</span>
+        <%= if @is_now_legal do %>
+          <span class="text-green-400 text-xs">(now legal - restore?)</span>
+        <% else %>
+          <span class="text-red-400 text-xs">({@card.removal_reason})</span>
+        <% end %>
+      </div>
+      <div class={[
+        "flex items-center gap-1 transition-opacity",
+        if(@is_now_legal, do: "opacity-100", else: "opacity-0 group-hover:opacity-100")
+      ]}>
+        <button
+          type="button"
+          phx-click="restore_card"
+          phx-value-scryfall_id={@card.scryfall_id}
+          phx-value-board="mainboard"
+          class={[
+            "text-xs px-2 py-0.5 rounded",
+            if(@is_now_legal, do: "bg-green-600 hover:bg-green-500 text-white", else: "bg-slate-600 hover:bg-slate-500 text-slate-100")
+          ]}
+        >
+          +Main
+        </button>
+        <button
+          type="button"
+          phx-click="restore_card"
+          phx-value-scryfall_id={@card.scryfall_id}
+          phx-value-board="sideboard"
+          class={[
+            "text-xs px-2 py-0.5 rounded",
+            if(@is_now_legal, do: "bg-green-600 hover:bg-green-500 text-white", else: "bg-slate-600 hover:bg-slate-500 text-slate-100")
+          ]}
+        >
+          +Side
+        </button>
+      </div>
+    </div>
+    """
+  end
+
+  attr :cmc, :any, required: true
+  attr :count, :integer, required: true
+  attr :max, :integer, required: true
+
+  defp mana_curve_bar(assigns) do
+    width_percent =
+      if assigns.max > 0 do
+        round(assigns.count / assigns.max * 100)
+      else
+        0
+      end
+
+    assigns = assign(assigns, :width_percent, width_percent)
+
+    ~H"""
+    <div class="flex items-center gap-1 text-xs">
+      <span class="w-4 text-slate-400">{@cmc}</span>
+      <div class="flex-1 h-3 bg-slate-700 rounded overflow-hidden">
+        <div class="h-full bg-amber-500" style={"width: #{@width_percent}%"}></div>
+      </div>
+      <span class="w-4 text-right text-slate-300">{@count}</span>
+    </div>
+    """
+  end
+
+  defp max_curve_count(curve) do
+    curve
+    |> Map.values()
+    |> Enum.max()
+    |> max(1)
+  end
+
+  defp color_class("W"), do: "text-yellow-200"
+  defp color_class("U"), do: "text-blue-400"
+  defp color_class("B"), do: "text-purple-400"
+  defp color_class("R"), do: "text-red-400"
+  defp color_class("G"), do: "text-green-400"
+  defp color_class("C"), do: "text-slate-400"
+  defp color_class(_), do: "text-slate-300"
+
+  defp color_name("W"), do: "White"
+  defp color_name("U"), do: "Blue"
+  defp color_name("B"), do: "Black"
+  defp color_name("R"), do: "Red"
+  defp color_name("G"), do: "Green"
+  defp color_name("C"), do: "Colorless"
+  defp color_name(c), do: c
+
+  defp format_mana_cost(nil), do: ""
+  defp format_mana_cost(cost), do: cost
+end
