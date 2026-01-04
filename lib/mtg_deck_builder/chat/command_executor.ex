@@ -41,8 +41,9 @@ defmodule MtgDeckBuilder.Chat.CommandExecutor do
   @spec execute_add(ParsedCommand.t(), Deck.t()) :: result()
   def execute_add(%ParsedCommand{card_name: name, quantity: qty, target_board: board}, deck) do
     format = deck.format || :modern
+    deck_card_ids = get_deck_card_ids(deck)
 
-    case CardResolver.resolve(name, format) do
+    case CardResolver.resolve(name, format, deck_card_ids: deck_card_ids) do
       {:ok, card} ->
         do_add(deck, card, board, qty, format)
 
@@ -95,8 +96,9 @@ defmodule MtgDeckBuilder.Chat.CommandExecutor do
   def execute_remove(%ParsedCommand{card_name: name, quantity: qty, source_board: board}, deck) do
     board = board || :mainboard
     format = deck.format || :modern
+    deck_card_ids = get_deck_card_ids(deck)
 
-    case CardResolver.resolve(name, format) do
+    case CardResolver.resolve(name, format, deck_card_ids: deck_card_ids) do
       {:ok, card} ->
         do_remove(deck, card, board, qty)
 
@@ -146,8 +148,9 @@ defmodule MtgDeckBuilder.Chat.CommandExecutor do
   @spec execute_set(ParsedCommand.t(), Deck.t()) :: result()
   def execute_set(%ParsedCommand{card_name: name, quantity: qty}, deck) do
     format = deck.format || :modern
+    deck_card_ids = get_deck_card_ids(deck)
 
-    case CardResolver.resolve(name, format) do
+    case CardResolver.resolve(name, format, deck_card_ids: deck_card_ids) do
       {:ok, card} ->
         do_set(deck, card, qty)
 
@@ -201,8 +204,9 @@ defmodule MtgDeckBuilder.Chat.CommandExecutor do
   def execute_move(%ParsedCommand{card_name: name, quantity: qty, source_board: from, target_board: to}, deck) do
     format = deck.format || :modern
     from = from || :mainboard
+    deck_card_ids = get_deck_card_ids(deck)
 
-    case CardResolver.resolve(name, format) do
+    case CardResolver.resolve(name, format, deck_card_ids: deck_card_ids) do
       {:ok, card} ->
         do_move(deck, card, from, to, qty)
 
@@ -216,7 +220,8 @@ defmodule MtgDeckBuilder.Chat.CommandExecutor do
   end
 
   defp do_move(deck, card, from, to, qty) do
-    from_list = Map.get(deck, from, [])
+    from_field = board_to_field(from)
+    from_list = Map.get(deck, from_field, [])
 
     case Enum.find(from_list, fn c -> c.scryfall_id == card.scryfall_id end) do
       nil ->
@@ -237,17 +242,35 @@ defmodule MtgDeckBuilder.Chat.CommandExecutor do
               {:error, reason}
           end
         else
-          # Partial move - remove from source, add to target
-          with {:ok, deck1} <- Decks.update_quantity(deck, card.scryfall_id, from, -move_qty),
-               {:ok, deck2} <- Decks.add_card(deck1, card.scryfall_id, to, move_qty) do
-            msg = ResponseFormatter.format_success(:move, %{card: card, quantity: move_qty, from: from, to: to})
-            {:ok, deck2, msg}
+          # Partial move - for staging, just move all
+          if from == :staging or to == :staging do
+            # Staging doesn't support partial moves, move all
+            case Decks.move_card(deck, card.scryfall_id, from, to) do
+              {:ok, updated_deck} ->
+                msg = ResponseFormatter.format_success(:move, %{card: card, quantity: existing.quantity, from: from, to: to})
+                {:ok, updated_deck, msg}
+
+              {:error, reason} ->
+                {:error, reason}
+            end
           else
-            {:error, reason} -> {:error, reason}
+            # Normal partial move between mainboard/sideboard
+            with {:ok, deck1} <- Decks.update_quantity(deck, card.scryfall_id, from, -move_qty),
+                 {:ok, deck2} <- Decks.add_card(deck1, card.scryfall_id, to, move_qty) do
+              msg = ResponseFormatter.format_success(:move, %{card: card, quantity: move_qty, from: from, to: to})
+              {:ok, deck2, msg}
+            else
+              {:error, reason} -> {:error, reason}
+            end
           end
         end
     end
   end
+
+  # Map board names to deck struct fields
+  defp board_to_field(:mainboard), do: :mainboard
+  defp board_to_field(:sideboard), do: :sideboard
+  defp board_to_field(:staging), do: :removed_cards
 
   @doc """
   Executes a query command.
@@ -255,8 +278,9 @@ defmodule MtgDeckBuilder.Chat.CommandExecutor do
   @spec execute_query(ParsedCommand.t(), Deck.t()) :: result()
   def execute_query(%ParsedCommand{query_type: :count, card_name: name}, deck) do
     format = deck.format || :modern
+    deck_card_ids = get_deck_card_ids(deck)
 
-    case CardResolver.resolve(name, format) do
+    case CardResolver.resolve(name, format, deck_card_ids: deck_card_ids) do
       {:ok, card} ->
         {mb_qty, sb_qty} = get_card_quantities(deck, card.scryfall_id)
         msg = ResponseFormatter.format_query_result(:count, %{card_name: card.name, mainboard: mb_qty, sideboard: sb_qty})
@@ -320,6 +344,13 @@ defmodule MtgDeckBuilder.Chat.CommandExecutor do
   end
 
   # Private helpers
+
+  defp get_deck_card_ids(deck) do
+    mainboard_ids = Enum.map(deck.mainboard, & &1.scryfall_id)
+    sideboard_ids = Enum.map(deck.sideboard, & &1.scryfall_id)
+    staging_ids = Enum.map(deck.removed_cards || [], & &1.scryfall_id)
+    mainboard_ids ++ sideboard_ids ++ staging_ids
+  end
 
   defp find_card_in_deck(deck, scryfall_id) do
     mainboard_card = Enum.find(deck.mainboard, fn c -> c.scryfall_id == scryfall_id end)

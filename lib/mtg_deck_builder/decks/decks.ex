@@ -138,8 +138,10 @@ defmodule MtgDeckBuilder.Decks do
   Moves a card from one board to another.
   """
   def move_card(%Deck{} = deck, scryfall_id, from, to)
-      when from in [:mainboard, :sideboard] and to in [:mainboard, :sideboard] and from != to do
-    from_list = Map.get(deck, from)
+      when from in [:mainboard, :sideboard, :staging] and to in [:mainboard, :sideboard, :staging] and from != to do
+    from_field = board_to_field(from)
+    to_field = board_to_field(to)
+    from_list = Map.get(deck, from_field)
 
     case Enum.find(from_list, fn c -> c.scryfall_id == scryfall_id end) do
       nil ->
@@ -150,7 +152,7 @@ defmodule MtgDeckBuilder.Decks do
         if to == :sideboard and Deck.sideboard_count(deck) + card.quantity > @max_sideboard do
           {:error, "Sideboard cannot exceed #{@max_sideboard} cards"}
         else
-          to_list = Map.get(deck, to)
+          to_list = Map.get(deck, to_field)
 
           # Remove from source
           updated_from = Enum.reject(from_list, fn c -> c.scryfall_id == scryfall_id end)
@@ -170,14 +172,19 @@ defmodule MtgDeckBuilder.Decks do
 
           updated_deck =
             deck
-            |> Map.put(from, updated_from)
-            |> Map.put(to, updated_to)
+            |> Map.put(from_field, updated_from)
+            |> Map.put(to_field, updated_to)
             |> Map.put(:updated_at, DateTime.utc_now() |> DateTime.to_iso8601())
 
           {:ok, updated_deck}
         end
     end
   end
+
+  # Map board names to deck struct fields
+  defp board_to_field(:mainboard), do: :mainboard
+  defp board_to_field(:sideboard), do: :sideboard
+  defp board_to_field(:staging), do: :removed_cards
 
   @doc """
   Moves a card from mainboard/sideboard to the staging area.

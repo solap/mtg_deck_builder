@@ -7,7 +7,7 @@ defmodule MtgDeckBuilder.AI.ParsedCommand do
   """
 
   @type action :: :add | :remove | :set | :move | :query | :undo | :help
-  @type board :: :mainboard | :sideboard
+  @type board :: :mainboard | :sideboard | :staging
   @type query_type :: :count | :list | :status
 
   @type t :: %__MODULE__{
@@ -33,7 +33,7 @@ defmodule MtgDeckBuilder.AI.ParsedCommand do
   ]
 
   @valid_actions [:add, :remove, :set, :move, :query, :undo, :help]
-  @valid_boards [:mainboard, :sideboard]
+  @valid_boards [:mainboard, :sideboard, :staging]
   @valid_query_types [:count, :list, :status]
 
   @doc """
@@ -156,6 +156,9 @@ defmodule MtgDeckBuilder.AI.ParsedCommand do
       "sideboard" -> :sideboard
       "sb" -> :sideboard
       "side" -> :sideboard
+      "staging" -> :staging
+      "stage" -> :staging
+      "removed" -> :staging
       _ -> nil
     end
   end

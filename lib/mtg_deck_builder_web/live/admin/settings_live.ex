@@ -155,6 +155,20 @@ defmodule MtgDeckBuilderWeb.Admin.SettingsLive do
         />
       <% end %>
 
+      <!-- Sample Deck -->
+      <div class="bg-slate-800 rounded-lg p-6 border border-slate-700 mt-6">
+        <h2 class="text-lg font-semibold text-amber-400 mb-4">Sample Deck</h2>
+        <p class="text-slate-400 text-sm mb-4">
+          Load a pre-built 4c Reanimator deck to test AI chat commands.
+        </p>
+        <a
+          href="/?load_sample=true"
+          class="inline-block bg-amber-500 hover:bg-amber-600 text-slate-900 font-medium px-4 py-2 rounded-lg"
+        >
+          Load Sample Deck
+        </a>
+      </div>
+
       <!-- Help Text -->
       <div class="bg-slate-900 rounded-lg p-4 border border-slate-700 mt-6">
         <h3 class="text-sm font-medium text-slate-400 mb-2">Getting API Keys</h3>

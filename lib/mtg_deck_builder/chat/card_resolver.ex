@@ -40,19 +40,22 @@ defmodule MtgDeckBuilder.Chat.CardResolver do
   ## Parameters
     - name: The card name from user input
     - format: The deck format for legality filtering (atom like :modern)
+    - opts: Optional keyword list with:
+      - deck_card_ids: List of scryfall_ids of cards in deck (prefer these)
   """
-  @spec resolve(String.t(), atom()) :: {:ok, Card.t()} | {:ambiguous, [Card.t()]} | {:not_found, [String.t()]}
-  def resolve(name, format) when is_binary(name) do
+  @spec resolve(String.t(), atom(), keyword()) :: {:ok, Card.t()} | {:ambiguous, [Card.t()]} | {:not_found, [String.t()]}
+  def resolve(name, format, opts \\ []) when is_binary(name) do
     name = String.trim(name)
+    deck_card_ids = Keyword.get(opts, :deck_card_ids, [])
 
     # First check recent selections
     case get_recent(name) do
       {:ok, card} -> {:ok, card}
-      :not_found -> resolve_from_db(name, format)
+      :not_found -> resolve_from_db(name, format, deck_card_ids)
     end
   end
 
-  defp resolve_from_db(name, format) do
+  defp resolve_from_db(name, format, deck_card_ids) do
     # Query with trigram similarity
     query = from c in Card,
       where: fragment("similarity(?, ?) > ?", c.name, ^name, @suggestion_threshold),
@@ -81,7 +84,17 @@ defmodule MtgDeckBuilder.Chat.CardResolver do
         if similarity >= @high_similarity_threshold do
           {:ok, first}
         else
-          {:ambiguous, matches}
+          # Before returning ambiguous, check if one of the matches is in the deck
+          # Prefer cards already in the deck
+          deck_match = Enum.find(matches, fn card ->
+            card.scryfall_id in deck_card_ids
+          end)
+
+          if deck_match do
+            {:ok, deck_match}
+          else
+            {:ambiguous, matches}
+          end
         end
     end
   end

@@ -22,7 +22,7 @@ defmodule MtgDeckBuilder.Chat.ResponseFormatter do
   end
 
   def format_success(:move, %{card: card, quantity: qty, from: from, to: to}) do
-    "Moved #{qty}x #{card.name} from #{from} to #{to}"
+    "Moved #{qty}x #{card.name} from #{format_board(from)} to #{format_board(to)}"
   end
 
   def format_success(:undo, %{description: desc}) do
@@ -35,7 +35,7 @@ defmodule MtgDeckBuilder.Chat.ResponseFormatter do
     • add [qty] <card> [to mainboard/sideboard]
     • remove [qty] <card> [from mainboard/sideboard]
     • set <card> to <qty>
-    • move [qty] <card> to mainboard/sideboard
+    • move <card> to mainboard/sideboard/staging
     • how many <card>
     • show mainboard/sideboard
     • deck status
@@ -159,4 +159,9 @@ defmodule MtgDeckBuilder.Chat.ResponseFormatter do
     Reply with the number to select.
     """
   end
+
+  # Private helpers
+
+  defp format_board(:staging), do: "staging area"
+  defp format_board(board), do: to_string(board)
 end

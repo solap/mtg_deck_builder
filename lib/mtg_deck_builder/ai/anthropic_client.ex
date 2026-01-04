@@ -34,13 +34,13 @@ defmodule MtgDeckBuilder.AI.AnthropicClient do
         },
         "source_board" => %{
           "type" => "string",
-          "enum" => ["mainboard", "sideboard"],
-          "description" => "Board to take cards from (for move/remove)"
+          "enum" => ["mainboard", "sideboard", "staging"],
+          "description" => "Board to take cards from (for move/remove). Staging is a holding area for cards being considered."
         },
         "target_board" => %{
           "type" => "string",
-          "enum" => ["mainboard", "sideboard"],
-          "description" => "Board to put cards in (default mainboard)"
+          "enum" => ["mainboard", "sideboard", "staging"],
+          "description" => "Board to put cards in. Staging area is for cards being considered/cut."
         },
         "query_type" => %{
           "type" => "string",
@@ -94,6 +94,31 @@ defmodule MtgDeckBuilder.AI.AnthropicClient do
         Jason.encode!(%{
           "model" => model,
           "max_tokens" => 256,
+          "system" => """
+          You are parsing Magic: The Gathering deck building commands.
+
+          IMPORTANT: Users often use acronyms for card names. Expand them to full card names:
+          - AOTG = Anger of the Gods
+          - SFM = Stoneforge Mystic
+          - BBE = Bloodbraid Elf
+          - JtMS = Jace, the Mind Sculptor
+          - LotV = Liliana of the Veil
+          - GoST = Geist of Saint Traft
+          - SoFI = Sword of Fire and Ice
+          - ToE = Teferi, Time Raveler (or Terror of the Peaks based on context)
+          - DRS = Deathrite Shaman
+          - etc.
+
+          If you see capitalized letters that look like an acronym, try to match it to a known MTG card.
+          Always output the full card name, not the acronym.
+
+          BOARD NAMES:
+          - "mainboard", "main", "mb" = mainboard
+          - "sideboard", "side", "sb" = sideboard
+          - "staging", "staging area", "stage", "removed" = staging (NOT sideboard!)
+
+          When users say "staging area" or "stage", always use "staging" as the target_board or source_board.
+          """,
           "tools" => [@tool_schema],
           "tool_choice" => %{"type" => "tool", "name" => "deck_command"},
           "messages" => [

@@ -8,25 +8,40 @@ defmodule MtgDeckBuilderWeb.DeckLive do
   alias MtgDeckBuilder.Chat.{CommandExecutor, CardResolver, ResponseFormatter, UndoServer}
 
   @impl true
-  def mount(_params, _session, socket) do
-    deck = Deck.new(:modern)
+  def mount(params, _session, socket) do
+    {deck, format, flash_msg} =
+      if params["load_sample"] == "true" do
+        case load_sample_deck("reanimator_4c") do
+          {:ok, sample_deck} ->
+            {sample_deck, sample_deck.format, "Loaded 4c Reanimator sample deck"}
 
-    {:ok,
-     socket
-     |> assign(:search_query, "")
-     |> assign(:search_results, [])
-     |> assign(:search_loading, false)
-     |> assign(:format, :modern)
-     |> assign(:deck, deck)
-     |> assign(:stats, Stats.calculate(deck))
-     |> assign(:validation_errors, Validator.get_errors(deck))
-     |> assign(:editing_name, false)
-     |> assign(:page_title, "Deck Editor")
-     # Chat assigns
-     |> assign(:chat_messages, [])
-     |> assign(:chat_input, "")
-     |> assign(:chat_processing, false)
-     |> assign(:disambiguation_options, nil)}
+          {:error, _reason} ->
+            {Deck.new(:modern), :modern, nil}
+        end
+      else
+        {Deck.new(:modern), :modern, nil}
+      end
+
+    socket =
+      socket
+      |> assign(:search_query, "")
+      |> assign(:search_results, [])
+      |> assign(:search_loading, false)
+      |> assign(:format, format)
+      |> assign(:deck, deck)
+      |> assign(:stats, Stats.calculate(deck))
+      |> assign(:validation_errors, Validator.get_errors(deck))
+      |> assign(:editing_name, false)
+      |> assign(:page_title, "Deck Editor")
+      # Chat assigns
+      |> assign(:chat_messages, [])
+      |> assign(:chat_input, "")
+      |> assign(:chat_processing, false)
+      |> assign(:disambiguation_options, nil)
+
+    socket = if flash_msg, do: put_flash(socket, :info, flash_msg), else: socket
+
+    {:ok, socket}
   end
 
   @impl true
@@ -729,6 +744,14 @@ defmodule MtgDeckBuilderWeb.DeckLive do
                 </h2>
               <% end %>
               <div class="flex items-center gap-3">
+                <button
+                  type="button"
+                  phx-click="load_sample_deck"
+                  class="text-xs text-slate-500 hover:text-amber-400 font-mono"
+                  title="Load sample 4c Reanimator deck"
+                >
+                  MVP
+                </button>
                 <a
                   href="/admin/settings"
                   class="text-xs text-slate-500 hover:text-amber-400"
@@ -736,13 +759,6 @@ defmodule MtgDeckBuilderWeb.DeckLive do
                 >
                   ⚙ Settings
                 </a>
-                <button
-                  type="button"
-                  phx-click="load_sample_deck"
-                  class="text-xs text-slate-500 hover:text-slate-300 underline"
-                >
-                  Load sample
-                </button>
                 <span class="text-sm text-slate-400 capitalize">{@format} Format</span>
               </div>
             </div>
