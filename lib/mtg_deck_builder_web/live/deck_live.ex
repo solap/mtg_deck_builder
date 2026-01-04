@@ -353,7 +353,7 @@ defmodule MtgDeckBuilderWeb.DeckLive do
               </div>
             </div>
 
-            <div class="grid grid-cols-1 sm:grid-cols-2 2xl:grid-cols-3 gap-4">
+            <div class="grid grid-cols-1 sm:grid-cols-2 gap-4">
               <.board_list
                 title="Mainboard"
                 board="mainboard"
@@ -373,11 +373,11 @@ defmodule MtgDeckBuilderWeb.DeckLive do
               />
 
             <!-- Staging Area -->
-              <div class="sm:col-span-2 2xl:col-span-1 sm:mt-4 2xl:mt-0">
+              <div class="sm:col-span-2">
                 <h3 class="text-sm font-medium text-amber-400 mb-2">
                   Staging Area ({length(@deck.removed_cards)} cards)
                 </h3>
-                <div class="bg-slate-900 rounded-lg p-3 border border-slate-700 min-h-[200px] max-h-[50vh] overflow-y-auto">
+                <div class="bg-slate-900 rounded-lg p-3 border border-slate-700 min-h-[100px]">
                 <%= if Enum.empty?(@deck.removed_cards) do %>
                   <p class="text-slate-500 text-sm text-center py-4">
                     Move cards here to consider later or when switching formats
@@ -475,7 +475,7 @@ defmodule MtgDeckBuilderWeb.DeckLive do
       <h3 class="text-sm font-medium text-slate-300 mb-2">
         {@title} ({@count}/{@max_count} cards)
       </h3>
-      <div class="bg-slate-900 rounded-lg p-3 min-h-[200px] max-h-[50vh] overflow-y-auto border border-slate-700">
+      <div class="bg-slate-900 rounded-lg p-3 min-h-[200px] border border-slate-700">
         <%= if Enum.empty?(@cards) do %>
           <p class="text-slate-500 text-sm text-center py-8">
             {@empty_message}
