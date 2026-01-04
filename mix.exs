@@ -54,6 +54,7 @@ defmodule MtgDeckBuilder.MixProject do
       {:telemetry_poller, "~> 1.0"},
       {:gettext, "~> 0.26"},
       {:jason, "~> 1.2"},
+      {:jaxon, "~> 2.0"},
       {:dns_cluster, "~> 0.1.1"},
       {:bandit, "~> 1.5"},
       # HTTP client for Scryfall bulk data download

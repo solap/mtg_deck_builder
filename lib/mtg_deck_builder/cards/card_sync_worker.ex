@@ -62,12 +62,16 @@ defmodule MtgDeckBuilder.Cards.CardSyncWorker do
       syncing: false
     }
 
-    if enabled do
-      # Schedule first sync after a short delay (don't block startup)
-      schedule_sync(60_000)
-      Logger.info("CardSyncWorker started, first sync in 60 seconds")
+    # Check if we have cards already
+    card_count = MtgDeckBuilder.Repo.aggregate(MtgDeckBuilder.Cards.Card, :count)
+
+    if enabled and card_count > 0 do
+      # Only auto-sync if we already have cards (incremental updates)
+      schedule_sync(interval_ms)
+      Logger.info("CardSyncWorker started, next sync in #{interval_hours} hours (#{card_count} cards in DB)")
     else
-      Logger.info("CardSyncWorker started but sync is disabled")
+      # Skip auto-sync for initial import - too heavy for free tier
+      Logger.info("CardSyncWorker started - auto-sync disabled (#{card_count} cards in DB, use manual import)")
     end
 
     {:ok, state}
