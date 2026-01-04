@@ -754,24 +754,7 @@ defmodule MtgDeckBuilderWeb.DeckLive do
                   <span class="text-slate-500 group-hover:text-slate-400 text-sm">&#9998;</span>
                 </h2>
               <% end %>
-              <div class="flex items-center gap-3">
-                <button
-                  type="button"
-                  phx-click="load_sample_deck"
-                  class="text-xs text-slate-500 hover:text-amber-400 font-mono"
-                  title="Load sample 4c Reanimator deck"
-                >
-                  MVP
-                </button>
-                <a
-                  href="/admin/settings"
-                  class="text-xs text-slate-500 hover:text-amber-400"
-                  title="AI Settings"
-                >
-                  ⚙ Settings
-                </a>
-                <span class="text-sm text-slate-400 capitalize">{@format} Format</span>
-              </div>
+              <span class="text-sm text-slate-400 capitalize">{@format} Format</span>
             </div>
 
             <!-- Deck Validity Indicator -->
