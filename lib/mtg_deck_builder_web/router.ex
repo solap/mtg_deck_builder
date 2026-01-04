@@ -24,6 +24,7 @@ defmodule MtgDeckBuilderWeb.Router do
   scope "/admin", MtgDeckBuilderWeb.Admin do
     pipe_through :browser
 
+    live "/settings", SettingsLive, :index
     live "/costs", CostsLive, :index
   end
 

@@ -232,22 +232,30 @@ defmodule MtgDeckBuilderWeb.DeckLive do
     command = String.trim(command)
     if command == "", do: {:noreply, socket}
 
-    # Add user message to chat
-    user_message = %{role: "user", content: command, timestamp: DateTime.utc_now()}
-    messages = socket.assigns.chat_messages ++ [user_message]
+    # Check if this is a disambiguation selection (number or card name)
+    case try_disambiguation_selection(command, socket.assigns.disambiguation_options) do
+      {:ok, index} ->
+        # User typed a number or card name matching disambiguation options
+        handle_event("select_card", %{"index" => Integer.to_string(index)}, socket)
 
-    socket =
-      socket
-      |> assign(:chat_messages, messages)
-      |> assign(:chat_input, "")
-      |> assign(:chat_processing, true)
-      |> assign(:disambiguation_options, nil)
-      |> push_event("command_sent", %{command: command})
+      :not_disambiguation ->
+        # Normal command processing
+        user_message = %{role: "user", content: command, timestamp: DateTime.utc_now()}
+        messages = socket.assigns.chat_messages ++ [user_message]
 
-    # Process command asynchronously
-    send(self(), {:process_command, command})
+        socket =
+          socket
+          |> assign(:chat_messages, messages)
+          |> assign(:chat_input, "")
+          |> assign(:chat_processing, true)
+          |> assign(:disambiguation_options, nil)
+          |> push_event("command_sent", %{command: command})
 
-    {:noreply, sync_chat(socket)}
+        # Process command asynchronously
+        send(self(), {:process_command, command})
+
+        {:noreply, sync_chat(socket)}
+    end
   end
 
   def handle_event("select_card", %{"index" => index_str}, socket) do
@@ -319,6 +327,7 @@ defmodule MtgDeckBuilderWeb.DeckLive do
         socket
         |> assign(:chat_processing, false)
         |> add_assistant_message(ResponseFormatter.format_error(:api_unavailable, %{}))
+        |> sync_chat()
     end
   end
 
@@ -480,11 +489,38 @@ defmodule MtgDeckBuilderWeb.DeckLive do
         %{
           role: msg.role,
           content: msg.content,
-          timestamp: if(msg.timestamp, do: DateTime.to_iso8601(msg.timestamp), else: nil)
+          timestamp: format_timestamp(msg.timestamp)
         }
       end)
 
     push_event(socket, "sync_chat", %{messages: messages})
+  end
+
+  defp format_timestamp(nil), do: nil
+  defp format_timestamp(%DateTime{} = dt), do: DateTime.to_iso8601(dt)
+  defp format_timestamp(str) when is_binary(str), do: str
+
+  # Check if user input is a disambiguation selection (number or card name)
+  defp try_disambiguation_selection(_input, nil), do: :not_disambiguation
+
+  defp try_disambiguation_selection(input, %{cards: cards}) do
+    input_lower = String.downcase(input)
+
+    # Try parsing as a number first
+    case Integer.parse(input) do
+      {num, ""} when num >= 1 and num <= length(cards) ->
+        {:ok, num}
+
+      _ ->
+        # Try matching card name (case insensitive, partial match)
+        case Enum.find_index(cards, fn card ->
+               String.downcase(card.name) == input_lower or
+                 String.contains?(String.downcase(card.name), input_lower)
+             end) do
+          nil -> :not_disambiguation
+          index -> {:ok, index + 1}
+        end
+    end
   end
 
   # Load a sample deck from priv/sample_decks
@@ -592,8 +628,9 @@ defmodule MtgDeckBuilderWeb.DeckLive do
     ~H"""
     <div id="deck-container" phx-hook="DeckStorage" phx-window-keydown="keydown" class="px-4 py-6">
       <div class="flex flex-col lg:flex-row gap-6">
-        <!-- Search Panel -->
-        <div class="w-full lg:w-80 xl:w-96 flex-shrink-0">
+        <!-- Left Column: Search + Chat -->
+        <div class="w-full lg:w-80 xl:w-96 flex-shrink-0 flex flex-col gap-4">
+          <!-- Search Panel -->
           <div class="bg-slate-800 rounded-lg p-4 border border-slate-700">
             <h2 class="text-lg font-semibold text-amber-400 mb-4">Card Search</h2>
 
@@ -625,11 +662,11 @@ defmodule MtgDeckBuilderWeb.DeckLive do
             </form>
 
             <!-- Search Results -->
-            <div class="space-y-2 max-h-[60vh] overflow-y-auto">
+            <div class="space-y-2 max-h-[35vh] overflow-y-auto">
               <%= if @search_loading do %>
                 <!-- Loading Skeleton -->
                 <div class="space-y-2">
-                  <%= for _i <- 1..5 do %>
+                  <%= for _i <- 1..3 do %>
                     <div class="bg-slate-700 rounded-lg p-3 animate-pulse">
                       <div class="flex items-start justify-between">
                         <div class="flex-1">
@@ -657,6 +694,13 @@ defmodule MtgDeckBuilderWeb.DeckLive do
               <% end %>
             </div>
           </div>
+
+          <!-- Chat Panel -->
+          <.chat_panel
+            messages={@chat_messages}
+            processing={@chat_processing}
+            disambiguation_options={@disambiguation_options}
+          />
         </div>
 
         <!-- Deck Panel -->
@@ -685,6 +729,13 @@ defmodule MtgDeckBuilderWeb.DeckLive do
                 </h2>
               <% end %>
               <div class="flex items-center gap-3">
+                <a
+                  href="/admin/settings"
+                  class="text-xs text-slate-500 hover:text-amber-400"
+                  title="AI Settings"
+                >
+                  ⚙ Settings
+                </a>
                 <button
                   type="button"
                   phx-click="load_sample_deck"
@@ -804,15 +855,6 @@ defmodule MtgDeckBuilderWeb.DeckLive do
           </div>
         </div>
       </div>
-
-      <!-- Chat Panel -->
-      <div class="mt-6">
-        <.chat_panel
-          messages={@chat_messages}
-          processing={@chat_processing}
-          disambiguation_options={@disambiguation_options}
-        />
-      </div>
     </div>
     """
   end
@@ -823,21 +865,20 @@ defmodule MtgDeckBuilderWeb.DeckLive do
 
   defp chat_panel(assigns) do
     ~H"""
-    <div id="chat-panel" phx-hook="ChatInput" class="bg-slate-800 rounded-lg border border-slate-700">
-      <div class="p-4 border-b border-slate-700">
+    <div id="chat-panel" phx-hook="ChatInput" class="bg-slate-800 rounded-lg border border-slate-700 flex flex-col">
+      <div class="p-3 border-b border-slate-700">
         <div class="flex items-center justify-between">
-          <h2 class="text-lg font-semibold text-amber-400">Chat Commands</h2>
-          <span class="text-xs text-slate-500">Press / to focus</span>
+          <h2 class="text-sm font-semibold text-amber-400">Chat Commands</h2>
+          <span class="text-xs text-slate-500">/</span>
         </div>
       </div>
 
       <!-- Messages -->
-      <div class="p-4 space-y-3 max-h-64 overflow-y-auto" id="chat-messages">
+      <div class="p-3 space-y-2 max-h-40 overflow-y-auto flex-1" id="chat-messages">
         <%= if Enum.empty?(@messages) do %>
-          <div class="text-slate-500 text-sm text-center py-4">
-            <p>Type commands like:</p>
-            <p class="text-slate-400 mt-1">"add 4 lightning bolt" or "deck status"</p>
-            <p class="text-slate-500 mt-2 text-xs">Type "help" for all commands</p>
+          <div class="text-slate-500 text-xs text-center py-2">
+            <p>"add 4 lightning bolt"</p>
+            <p class="text-slate-600 mt-1">Type "help" for commands</p>
           </div>
         <% else %>
           <%= for message <- @messages do %>
@@ -846,27 +887,27 @@ defmodule MtgDeckBuilderWeb.DeckLive do
         <% end %>
 
         <%= if @processing do %>
-          <div class="flex items-center gap-2 text-slate-400 text-sm">
+          <div class="flex items-center gap-2 text-slate-400 text-xs">
             <span class="animate-pulse">...</span>
-            <span>Processing command</span>
+            <span>Processing</span>
           </div>
         <% end %>
       </div>
 
       <!-- Disambiguation Options -->
       <%= if @disambiguation_options do %>
-        <div class="px-4 pb-4">
-          <div class="bg-slate-900 rounded-lg p-3 border border-amber-500/50">
-            <p class="text-sm text-slate-300 mb-2">Select a card:</p>
-            <div class="flex flex-wrap gap-2">
+        <div class="px-3 pb-3">
+          <div class="bg-slate-900 rounded p-2 border border-amber-500/50">
+            <p class="text-xs text-slate-300 mb-1">Select:</p>
+            <div class="flex flex-col gap-1">
               <%= for {card, idx} <- Enum.with_index(@disambiguation_options.cards, 1) do %>
                 <button
                   type="button"
                   phx-click="select_card"
                   phx-value-index={idx}
-                  class="bg-slate-700 hover:bg-slate-600 text-slate-100 px-3 py-1 rounded text-sm"
+                  class="bg-slate-700 hover:bg-slate-600 text-slate-100 px-2 py-1 rounded text-xs text-left"
                 >
-                  {idx}. {card.name} ({String.upcase(card.set_code || "???")})
+                  {idx}. {card.name}
                 </button>
               <% end %>
             </div>
@@ -875,20 +916,20 @@ defmodule MtgDeckBuilderWeb.DeckLive do
       <% end %>
 
       <!-- Input -->
-      <div class="p-4 border-t border-slate-700">
+      <div class="p-3 border-t border-slate-700">
         <form phx-submit="submit_command" class="flex gap-2">
           <input
             type="text"
             name="command"
-            placeholder="Type a command... (e.g., add 4 lightning bolt)"
+            placeholder="add 4 lightning bolt..."
             autocomplete="off"
             disabled={@processing}
-            class="flex-1 bg-slate-700 border border-slate-600 rounded-lg px-4 py-2 text-slate-100 placeholder-slate-400 focus:outline-none focus:ring-2 focus:ring-amber-400 focus:border-transparent disabled:opacity-50"
+            class="flex-1 bg-slate-700 border border-slate-600 rounded px-3 py-1.5 text-sm text-slate-100 placeholder-slate-400 focus:outline-none focus:ring-2 focus:ring-amber-400 focus:border-transparent disabled:opacity-50"
           />
           <button
             type="submit"
             disabled={@processing}
-            class="bg-amber-500 hover:bg-amber-600 disabled:bg-amber-500/50 text-slate-900 font-medium px-4 py-2 rounded-lg"
+            class="bg-amber-500 hover:bg-amber-600 disabled:bg-amber-500/50 text-slate-900 font-medium px-3 py-1.5 rounded text-sm"
           >
             Send
           </button>
@@ -903,18 +944,16 @@ defmodule MtgDeckBuilderWeb.DeckLive do
   defp chat_message(assigns) do
     ~H"""
     <div class={[
-      "rounded-lg p-3 text-sm",
+      "rounded p-2 text-xs",
       if(@message.role == "user", do: "bg-slate-700 text-slate-100", else: "bg-slate-900 text-slate-300")
     ]}>
-      <div class="flex items-start gap-2">
-        <span class={[
-          "text-xs font-medium",
-          if(@message.role == "user", do: "text-amber-400", else: "text-slate-500")
-        ]}>
-          {if @message.role == "user", do: "You", else: "Bot"}
-        </span>
-      </div>
-      <div class="mt-1 whitespace-pre-wrap">{@message.content}</div>
+      <span class={[
+        "font-medium",
+        if(@message.role == "user", do: "text-amber-400", else: "text-slate-500")
+      ]}>
+        {if @message.role == "user", do: "You:", else: "Bot:"}
+      </span>
+      <span class="ml-1 whitespace-pre-wrap">{@message.content}</span>
     </div>
     """
   end

@@ -200,10 +200,19 @@ defmodule MtgDeckBuilder.AI.AnthropicClient do
   end
 
   defp get_api_key do
-    Application.get_env(:mtg_deck_builder, :anthropic)[:api_key]
+    # Try DB first, then fall back to environment config
+    case MtgDeckBuilder.Settings.get_api_key("anthropic") do
+      nil -> Application.get_env(:mtg_deck_builder, :anthropic)[:api_key]
+      "" -> Application.get_env(:mtg_deck_builder, :anthropic)[:api_key]
+      key -> key
+    end
   end
 
   defp get_model do
-    Application.get_env(:mtg_deck_builder, :anthropic)[:model] || "claude-3-haiku-20240307"
+    # Try DB first, then fall back to environment config
+    case MtgDeckBuilder.Settings.get_model("anthropic") do
+      nil -> Application.get_env(:mtg_deck_builder, :anthropic)[:model] || "claude-3-haiku-20240307"
+      model -> model
+    end
   end
 end

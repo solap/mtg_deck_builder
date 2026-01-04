@@ -70,8 +70,26 @@ defmodule MtgDeckBuilderWeb.Admin.CostsLive do
     ~H"""
     <div class="px-4 py-6">
       <div class="mb-6">
-        <h1 class="text-2xl font-bold text-amber-400">API Costs Dashboard</h1>
-        <p class="text-slate-400 text-sm mt-1">Monitor AI API usage and costs</p>
+        <div class="flex items-center justify-between">
+          <div>
+            <h1 class="text-2xl font-bold text-amber-400">API Costs Dashboard</h1>
+            <p class="text-slate-400 text-sm mt-1">Monitor AI API usage and costs</p>
+          </div>
+          <div class="flex items-center gap-4">
+            <a
+              href="/admin/settings"
+              class="text-sm text-slate-400 hover:text-amber-400"
+            >
+              ⚙ Settings
+            </a>
+            <a
+              href="/"
+              class="text-sm text-slate-400 hover:text-amber-400"
+            >
+              ← Back to Deck
+            </a>
+          </div>
+        </div>
       </div>
 
       <!-- Filters -->
