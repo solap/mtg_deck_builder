@@ -14,6 +14,8 @@ defmodule MtgDeckBuilder.Application do
       {Phoenix.PubSub, name: MtgDeckBuilder.PubSub},
       # Scheduled card data sync
       MtgDeckBuilder.Cards.CardSyncWorker,
+      # Chat undo state manager
+      MtgDeckBuilder.Chat.UndoServer,
       # Start to serve requests, typically the last entry
       MtgDeckBuilderWeb.Endpoint
     ]

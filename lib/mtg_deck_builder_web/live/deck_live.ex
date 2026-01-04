@@ -4,6 +4,8 @@ defmodule MtgDeckBuilderWeb.DeckLive do
   alias MtgDeckBuilder.Cards
   alias MtgDeckBuilder.Decks
   alias MtgDeckBuilder.Decks.{Deck, Stats, Validator}
+  alias MtgDeckBuilder.AI.AnthropicClient
+  alias MtgDeckBuilder.Chat.{CommandExecutor, CardResolver, ResponseFormatter, UndoServer}
 
   @impl true
   def mount(_params, _session, socket) do
@@ -19,7 +21,12 @@ defmodule MtgDeckBuilderWeb.DeckLive do
      |> assign(:stats, Stats.calculate(deck))
      |> assign(:validation_errors, Validator.get_errors(deck))
      |> assign(:editing_name, false)
-     |> assign(:page_title, "Deck Editor")}
+     |> assign(:page_title, "Deck Editor")
+     # Chat assigns
+     |> assign(:chat_messages, [])
+     |> assign(:chat_input, "")
+     |> assign(:chat_processing, false)
+     |> assign(:disambiguation_options, nil)}
   end
 
   @impl true
@@ -33,6 +40,10 @@ defmodule MtgDeckBuilderWeb.DeckLive do
 
   def handle_event("keydown", %{"key" => "Escape"}, socket) do
     {:noreply, assign(socket, search_results: [], search_query: "")}
+  end
+
+  def handle_event("keydown", %{"key" => "/"}, socket) do
+    {:noreply, push_event(socket, "focus_chat", %{})}
   end
 
   def handle_event("keydown", _params, socket), do: {:noreply, socket}
@@ -211,6 +222,269 @@ defmodule MtgDeckBuilderWeb.DeckLive do
 
   def handle_event("cancel_edit_name", _params, socket) do
     {:noreply, assign(socket, :editing_name, false)}
+  end
+
+  # Chat event handlers
+
+  def handle_event("submit_command", %{"command" => ""}, socket), do: {:noreply, socket}
+
+  def handle_event("submit_command", %{"command" => command}, socket) do
+    command = String.trim(command)
+    if command == "", do: {:noreply, socket}
+
+    # Add user message to chat
+    user_message = %{role: "user", content: command, timestamp: DateTime.utc_now()}
+    messages = socket.assigns.chat_messages ++ [user_message]
+
+    socket =
+      socket
+      |> assign(:chat_messages, messages)
+      |> assign(:chat_input, "")
+      |> assign(:chat_processing, true)
+      |> assign(:disambiguation_options, nil)
+      |> push_event("command_sent", %{command: command})
+
+    # Process command asynchronously
+    send(self(), {:process_command, command})
+
+    {:noreply, sync_chat(socket)}
+  end
+
+  def handle_event("select_card", %{"index" => index_str}, socket) do
+    index = String.to_integer(index_str) - 1
+    options = socket.assigns.disambiguation_options
+
+    case Enum.at(options.cards, index) do
+      nil ->
+        {:noreply, add_assistant_message(socket, "Invalid selection. Please try again.")}
+
+      card ->
+        # Remember this selection for future
+        CardResolver.remember_selection(options.original_name, card)
+
+        # Re-execute the original command with the resolved card
+        socket = assign(socket, :disambiguation_options, nil)
+        send(self(), {:execute_with_card, options.original_command, card})
+        {:noreply, socket}
+    end
+  end
+
+  def handle_event("load_chat", %{"messages" => messages}, socket) when is_list(messages) do
+    decoded_messages =
+      Enum.map(messages, fn msg ->
+        %{
+          role: msg["role"] || "user",
+          content: msg["content"] || "",
+          timestamp: msg["timestamp"]
+        }
+      end)
+
+    {:noreply, assign(socket, :chat_messages, decoded_messages)}
+  end
+
+  def handle_event("load_chat", _params, socket), do: {:noreply, socket}
+
+  def handle_event("focus_chat_shortcut", _params, socket) do
+    {:noreply, push_event(socket, "focus_chat", %{})}
+  end
+
+  @impl true
+  def handle_info({:process_command, command}, socket) do
+    socket = process_chat_command(command, socket)
+    {:noreply, socket}
+  end
+
+  def handle_info({:execute_with_card, command, card}, socket) do
+    # Re-parse and execute with the specific card
+    case AnthropicClient.parse_command(command) do
+      {:ok, parsed_cmd} ->
+        execute_command_with_card(parsed_cmd, card, socket)
+
+      {:error, reason} ->
+        socket =
+          socket
+          |> assign(:chat_processing, false)
+          |> add_assistant_message("Error: #{reason}")
+
+        {:noreply, sync_chat(socket)}
+    end
+  end
+
+  defp process_chat_command(command, socket) do
+    case AnthropicClient.parse_command(command) do
+      {:ok, parsed_cmd} ->
+        execute_parsed_command(parsed_cmd, command, socket)
+
+      {:error, _reason} ->
+        socket
+        |> assign(:chat_processing, false)
+        |> add_assistant_message(ResponseFormatter.format_error(:api_unavailable, %{}))
+    end
+  end
+
+  defp execute_parsed_command(parsed_cmd, original_command, socket) do
+    deck = socket.assigns.deck
+
+    # Save undo state before modification (for modifying actions)
+    if parsed_cmd.action in [:add, :remove, :set, :move] do
+      description = "#{parsed_cmd.action} #{parsed_cmd.quantity || 1}x #{parsed_cmd.card_name}"
+      UndoServer.save_state(deck, description)
+    end
+
+    case CommandExecutor.execute(parsed_cmd, deck) do
+      {:ok, updated_deck, message} ->
+        socket
+        |> assign(:deck, updated_deck)
+        |> assign(:chat_processing, false)
+        |> add_assistant_message(message)
+        |> sync_deck()
+        |> sync_chat()
+
+      {:error, message} ->
+        socket
+        |> assign(:chat_processing, false)
+        |> add_assistant_message(message)
+        |> sync_chat()
+
+      {:disambiguation, cards} ->
+        disambiguation_msg = ResponseFormatter.format_disambiguation(cards)
+
+        socket
+        |> assign(:chat_processing, false)
+        |> assign(:disambiguation_options, %{
+          cards: cards,
+          original_command: original_command,
+          original_name: parsed_cmd.card_name
+        })
+        |> add_assistant_message(disambiguation_msg)
+        |> sync_chat()
+
+      {:undo_requested, _deck} ->
+        handle_undo(socket)
+    end
+  end
+
+  defp execute_command_with_card(parsed_cmd, card, socket) do
+    deck = socket.assigns.deck
+
+    # Save undo state
+    if parsed_cmd.action in [:add, :remove, :set, :move] do
+      description = "#{parsed_cmd.action} #{parsed_cmd.quantity || 1}x #{card.name}"
+      UndoServer.save_state(deck, description)
+    end
+
+    # Execute based on action type with the specific card
+    result =
+      case parsed_cmd.action do
+        :add ->
+          board = parsed_cmd.target_board || :mainboard
+          qty = parsed_cmd.quantity || 1
+
+          case Decks.add_card(deck, card.scryfall_id, board, qty) do
+            {:ok, updated_deck} ->
+              msg = ResponseFormatter.format_success(:add, %{card: card, quantity: qty, board: board})
+              {:ok, updated_deck, msg}
+
+            {:error, reason} ->
+              {:error, reason}
+          end
+
+        :remove ->
+          board = parsed_cmd.source_board || :mainboard
+          qty = parsed_cmd.quantity
+
+          board_list = Map.get(deck, board, [])
+
+          case Enum.find(board_list, fn c -> c.scryfall_id == card.scryfall_id end) do
+            nil ->
+              {:error, ResponseFormatter.format_error(:card_not_in_deck, %{name: card.name, board: board})}
+
+            existing ->
+              remove_qty = if is_nil(qty) or qty >= existing.quantity, do: existing.quantity, else: qty
+
+              if remove_qty >= existing.quantity do
+                updated_deck = Decks.remove_card(deck, card.scryfall_id, board)
+                msg = ResponseFormatter.format_success(:remove, %{card: card, quantity: remove_qty, board: board})
+                {:ok, updated_deck, msg}
+              else
+                case Decks.update_quantity(deck, card.scryfall_id, board, -remove_qty) do
+                  {:ok, updated_deck} ->
+                    msg = ResponseFormatter.format_success(:remove, %{card: card, quantity: remove_qty, board: board})
+                    {:ok, updated_deck, msg}
+
+                  {:error, reason} ->
+                    {:error, reason}
+                end
+              end
+          end
+
+        _ ->
+          # Other actions, re-execute normally
+          CommandExecutor.execute(parsed_cmd, deck)
+      end
+
+    case result do
+      {:ok, updated_deck, message} ->
+        socket =
+          socket
+          |> assign(:deck, updated_deck)
+          |> assign(:chat_processing, false)
+          |> add_assistant_message(message)
+          |> sync_deck()
+          |> sync_chat()
+
+        {:noreply, socket}
+
+      {:error, message} ->
+        socket =
+          socket
+          |> assign(:chat_processing, false)
+          |> add_assistant_message(message)
+          |> sync_chat()
+
+        {:noreply, socket}
+    end
+  end
+
+  defp handle_undo(socket) do
+    case UndoServer.undo() do
+      {:ok, previous_deck, description} ->
+        msg = ResponseFormatter.format_success(:undo, %{description: description})
+
+        socket
+        |> assign(:deck, previous_deck)
+        |> assign(:chat_processing, false)
+        |> add_assistant_message(msg)
+        |> sync_deck()
+        |> sync_chat()
+
+      {:error, :nothing_to_undo} ->
+        msg = ResponseFormatter.format_error(:nothing_to_undo, %{})
+
+        socket
+        |> assign(:chat_processing, false)
+        |> add_assistant_message(msg)
+        |> sync_chat()
+    end
+  end
+
+  defp add_assistant_message(socket, content) do
+    message = %{role: "assistant", content: content, timestamp: DateTime.utc_now()}
+    messages = socket.assigns.chat_messages ++ [message]
+    assign(socket, :chat_messages, messages)
+  end
+
+  defp sync_chat(socket) do
+    messages =
+      Enum.map(socket.assigns.chat_messages, fn msg ->
+        %{
+          role: msg.role,
+          content: msg.content,
+          timestamp: if(msg.timestamp, do: DateTime.to_iso8601(msg.timestamp), else: nil)
+        }
+      end)
+
+    push_event(socket, "sync_chat", %{messages: messages})
   end
 
   # Load a sample deck from priv/sample_decks
@@ -530,6 +804,117 @@ defmodule MtgDeckBuilderWeb.DeckLive do
           </div>
         </div>
       </div>
+
+      <!-- Chat Panel -->
+      <div class="mt-6">
+        <.chat_panel
+          messages={@chat_messages}
+          processing={@chat_processing}
+          disambiguation_options={@disambiguation_options}
+        />
+      </div>
+    </div>
+    """
+  end
+
+  attr :messages, :list, required: true
+  attr :processing, :boolean, required: true
+  attr :disambiguation_options, :any, required: true
+
+  defp chat_panel(assigns) do
+    ~H"""
+    <div id="chat-panel" phx-hook="ChatInput" class="bg-slate-800 rounded-lg border border-slate-700">
+      <div class="p-4 border-b border-slate-700">
+        <div class="flex items-center justify-between">
+          <h2 class="text-lg font-semibold text-amber-400">Chat Commands</h2>
+          <span class="text-xs text-slate-500">Press / to focus</span>
+        </div>
+      </div>
+
+      <!-- Messages -->
+      <div class="p-4 space-y-3 max-h-64 overflow-y-auto" id="chat-messages">
+        <%= if Enum.empty?(@messages) do %>
+          <div class="text-slate-500 text-sm text-center py-4">
+            <p>Type commands like:</p>
+            <p class="text-slate-400 mt-1">"add 4 lightning bolt" or "deck status"</p>
+            <p class="text-slate-500 mt-2 text-xs">Type "help" for all commands</p>
+          </div>
+        <% else %>
+          <%= for message <- @messages do %>
+            <.chat_message message={message} />
+          <% end %>
+        <% end %>
+
+        <%= if @processing do %>
+          <div class="flex items-center gap-2 text-slate-400 text-sm">
+            <span class="animate-pulse">...</span>
+            <span>Processing command</span>
+          </div>
+        <% end %>
+      </div>
+
+      <!-- Disambiguation Options -->
+      <%= if @disambiguation_options do %>
+        <div class="px-4 pb-4">
+          <div class="bg-slate-900 rounded-lg p-3 border border-amber-500/50">
+            <p class="text-sm text-slate-300 mb-2">Select a card:</p>
+            <div class="flex flex-wrap gap-2">
+              <%= for {card, idx} <- Enum.with_index(@disambiguation_options.cards, 1) do %>
+                <button
+                  type="button"
+                  phx-click="select_card"
+                  phx-value-index={idx}
+                  class="bg-slate-700 hover:bg-slate-600 text-slate-100 px-3 py-1 rounded text-sm"
+                >
+                  {idx}. {card.name} ({String.upcase(card.set_code || "???")})
+                </button>
+              <% end %>
+            </div>
+          </div>
+        </div>
+      <% end %>
+
+      <!-- Input -->
+      <div class="p-4 border-t border-slate-700">
+        <form phx-submit="submit_command" class="flex gap-2">
+          <input
+            type="text"
+            name="command"
+            placeholder="Type a command... (e.g., add 4 lightning bolt)"
+            autocomplete="off"
+            disabled={@processing}
+            class="flex-1 bg-slate-700 border border-slate-600 rounded-lg px-4 py-2 text-slate-100 placeholder-slate-400 focus:outline-none focus:ring-2 focus:ring-amber-400 focus:border-transparent disabled:opacity-50"
+          />
+          <button
+            type="submit"
+            disabled={@processing}
+            class="bg-amber-500 hover:bg-amber-600 disabled:bg-amber-500/50 text-slate-900 font-medium px-4 py-2 rounded-lg"
+          >
+            Send
+          </button>
+        </form>
+      </div>
+    </div>
+    """
+  end
+
+  attr :message, :map, required: true
+
+  defp chat_message(assigns) do
+    ~H"""
+    <div class={[
+      "rounded-lg p-3 text-sm",
+      if(@message.role == "user", do: "bg-slate-700 text-slate-100", else: "bg-slate-900 text-slate-300")
+    ]}>
+      <div class="flex items-start gap-2">
+        <span class={[
+          "text-xs font-medium",
+          if(@message.role == "user", do: "text-amber-400", else: "text-slate-500")
+        ]}>
+          {if @message.role == "user", do: "You", else: "Bot"}
+        </span>
+      </div>
+      <div class="mt-1 whitespace-pre-wrap">{@message.content}</div>
     </div>
     """
   end

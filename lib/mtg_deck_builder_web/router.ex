@@ -20,6 +20,13 @@ defmodule MtgDeckBuilderWeb.Router do
     live "/", DeckLive, :index
   end
 
+  # Admin routes (add authentication later)
+  scope "/admin", MtgDeckBuilderWeb.Admin do
+    pipe_through :browser
+
+    live "/costs", CostsLive, :index
+  end
+
   # Other scopes may use custom stacks.
   # scope "/api", MtgDeckBuilderWeb do
   #   pipe_through :api

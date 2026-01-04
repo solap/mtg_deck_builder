@@ -1,5 +1,16 @@
 import Config
 
+# AI API Configuration
+config :mtg_deck_builder, :anthropic,
+  api_key: System.get_env("ANTHROPIC_API_KEY"),
+  model: System.get_env("ANTHROPIC_MODEL") || "claude-3-haiku-20240307"
+
+config :mtg_deck_builder, :openai,
+  api_key: System.get_env("OPENAI_API_KEY")
+
+config :mtg_deck_builder, :xai,
+  api_key: System.get_env("XAI_API_KEY")
+
 # config/runtime.exs is executed for all environments, including
 # during releases. It is executed after compilation and before the
 # system starts, so it is typically used to load production configuration

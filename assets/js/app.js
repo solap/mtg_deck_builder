@@ -24,9 +24,11 @@ import topbar from "../vendor/topbar"
 
 // Import hooks
 import DeckStorage from "./hooks/deck_storage"
+import ChatInput from "./hooks/chat_input"
 
 let Hooks = {
-  DeckStorage
+  DeckStorage,
+  ChatInput
 };
 
 let csrfToken = document.querySelector("meta[name='csrf-token']").getAttribute("content")
