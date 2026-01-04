@@ -43,6 +43,82 @@ Users can either:
 └─────────────────────────────────────────────────────┘
 ```
 
+## Card Data Import Architecture
+
+### The Problem
+
+Importing ~36,000 cards from Scryfall's 166MB JSON file into PostgreSQL on a memory-constrained Fly.io instance presented several challenges:
+
+1. **Memory pressure**: Loading 166MB JSON into memory causes OOM on 2GB VMs
+2. **Connection timeouts**: Long-running INSERT transactions exhaust the connection pool
+3. **Slow imports**: Individual INSERTs take minutes, making daily syncs impractical
+
+### The Solution: PostgreSQL COPY Protocol
+
+We use PostgreSQL's COPY protocol via Postgrex, which is 10-100x faster than INSERT:
+
+```
+Scryfall API
+    ↓ GET bulk-data (find oracle_cards URL)
+https://data.scryfall.io/oracle-cards/oracle-cards-YYYYMMDD.json (166MB)
+    ↓ hackney streaming download
+/tmp/scryfall_oracle_cards_TIMESTAMP.json
+    ↓ Jaxon streaming JSON parse (no full load)
+Stream of card objects
+    ↓ Transform to CSV rows
+    ↓ Postgrex.stream() with COPY FROM STDIN
+PostgreSQL cards table
+```
+
+### Why COPY is Faster
+
+| Factor | INSERT | COPY |
+|--------|--------|------|
+| SQL parsing | Per row | None |
+| Transaction overhead | High | Minimal |
+| WAL writes | Per row | Batched |
+| Round trips | Per batch | Single stream |
+| Index updates | Continuous | Deferred |
+
+**Result**: 36,264 cards in ~11 seconds vs several minutes with batch INSERT.
+
+### Key Implementation Details
+
+```elixir
+# CopyImporter uses a dedicated connection (not from pool)
+config = Repo.config() |> Keyword.delete(:pool)
+{:ok, conn} = Postgrex.start_link(config)
+
+# Stream JSON → CSV → COPY in a single transaction
+Postgrex.transaction(conn, fn conn ->
+  copy_stream = Postgrex.stream(conn, "COPY cards (...) FROM STDIN WITH CSV", [])
+
+  file_path
+  |> File.stream!([], 65_536)           # Stream file in 64KB chunks
+  |> Jaxon.Stream.from_enumerable()      # Parse JSON as stream
+  |> Jaxon.Stream.query([:root, :all])   # Extract array elements
+  |> Stream.map(&card_to_csv_row/1)      # Transform to CSV
+  |> Enum.into(copy_stream)              # Pipe to COPY
+end, timeout: :infinity)
+```
+
+### Automatic Sync Schedule
+
+The `CardSyncWorker` GenServer handles synchronization:
+
+- **First boot (empty DB)**: Schedules import after 30s delay
+- **With existing cards**: Schedules daily sync (24h interval)
+- **On sync completion**: Schedules next sync
+- **On failure**: Retries in 1 hour
+
+### Lessons Learned
+
+1. **Don't use the Ecto pool for bulk operations** - use a dedicated Postgrex connection
+2. **Streaming JSON is essential** - Jaxon vs Jason makes the difference between OOM and success
+3. **COPY requires CSV format** - transform JSON to CSV rows with proper escaping
+4. **PostgreSQL arrays need special format** - `{item1,item2}` not `["item1","item2"]`
+5. **Transaction timeout: :infinity** - bulk operations need unlimited time
+
 ## Features
 
 ### Phase 1: Foundation (MVP)

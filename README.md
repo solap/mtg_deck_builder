@@ -2,6 +2,8 @@
 
 A Magic: The Gathering deck building application built with Phoenix LiveView.
 
+**Live Demo**: https://mtg-deck-builder-mvp.fly.dev
+
 ## Features
 
 - **Card Search**: Search over 36,000+ cards from Scryfall's oracle cards database
@@ -10,6 +12,7 @@ A Magic: The Gathering deck building application built with Phoenix LiveView.
 - **Format Validation**: Automatic illegal card detection when switching formats
 - **Deck Statistics**: Real-time mana curve, color distribution, type breakdown, and price totals
 - **Local Persistence**: Deck state saved to browser localStorage
+- **AI Chat Commands**: Natural language deck building (e.g., "add 4 lightning bolt")
 
 ## Setup
 
@@ -31,7 +34,7 @@ A Magic: The Gathering deck building application built with Phoenix LiveView.
    mix ecto.setup
    ```
 
-3. Import card data from Scryfall (~2-3 minutes):
+3. Import card data from Scryfall (~30 seconds with COPY):
    ```bash
    mix cards.import
    ```
@@ -43,13 +46,85 @@ A Magic: The Gathering deck building application built with Phoenix LiveView.
 
 5. Visit [`localhost:4000`](http://localhost:4000)
 
-## Card Data
+## Card Data Architecture
 
-Card data is imported from [Scryfall](https://scryfall.com)'s bulk data API. The `oracle_cards` dataset contains one entry per unique card (~36,000 cards).
+Card data is sourced from [Scryfall](https://scryfall.com)'s bulk data API (`oracle_cards` - ~36,000 unique cards, 166MB JSON).
 
-To sync card data (for ban list updates):
+### High-Performance Import with PostgreSQL COPY
+
+We use PostgreSQL's COPY protocol instead of INSERT for 10-100x faster imports:
+
+```
+Scryfall JSON (166MB)
+    ↓ hackney (streaming download)
+Temp file
+    ↓ Jaxon (streaming JSON parse)
+CSV rows
+    ↓ Postgrex COPY protocol
+PostgreSQL
+```
+
+**Performance**: ~36,000 cards imported in ~11 seconds (vs minutes with INSERT)
+
+### Key Components
+
+| Module | Purpose |
+|--------|---------|
+| `Cards.CopyImporter` | High-performance COPY-based import |
+| `Cards.CardSyncWorker` | Scheduled daily sync (GenServer) |
+| `Cards.BulkImporter` | Legacy INSERT-based import |
+
+### Automatic Sync
+
+The `CardSyncWorker` handles card data automatically:
+
+- **On first deploy** (empty DB): Auto-imports after 30s delay
+- **Daily sync**: Refreshes prices/legalities every 24 hours
+- **Manual trigger**: `CardSyncWorker.sync_now()`
+
+### Why COPY over INSERT?
+
+| Approach | Speed | Memory | Reliability |
+|----------|-------|--------|-------------|
+| INSERT (individual) | ~100 rows/sec | Low | Timeouts |
+| INSERT (batch) | ~500 rows/sec | Medium | Pool exhaustion |
+| **COPY protocol** | **~3,300 rows/sec** | Low | Dedicated connection |
+
+COPY bypasses SQL parsing, batches WAL writes, and uses a dedicated connection to avoid pool contention.
+
+## Production Deployment (Fly.io)
+
+### Initial Deploy
+
 ```bash
-mix cards.sync
+fly launch
+fly postgres create --name mtg-deck-builder-mvp-db
+fly postgres attach mtg-deck-builder-mvp-db
+fly deploy
+```
+
+The app will auto-import cards on first boot (wait ~30s after deploy).
+
+### Manual Card Sync
+
+```bash
+fly ssh console -C '/app/bin/mtg_deck_builder rpc "MtgDeckBuilder.Cards.CardSyncWorker.sync_now()"'
+```
+
+### Check Card Count
+
+```bash
+fly ssh console -C '/app/bin/mtg_deck_builder rpc "IO.puts(MtgDeckBuilder.Cards.count())"'
+```
+
+### Configuration
+
+```toml
+# fly.toml
+[[vm]]
+  memory = '2gb'  # Required for card import
+  cpu_kind = 'shared'
+  cpus = 1
 ```
 
 ## Development
@@ -67,13 +142,41 @@ mix credo --strict
 mix dialyzer
 ```
 
+### Useful IEx Commands
+
+```elixir
+# Search cards
+MtgDeckBuilder.Cards.search("lightning bolt", format: :modern)
+
+# Card count
+MtgDeckBuilder.Cards.count()
+
+# Check sync status
+MtgDeckBuilder.Cards.CardSyncWorker.status()
+
+# Manual sync
+MtgDeckBuilder.Cards.CardSyncWorker.sync_now()
+```
+
 ## Architecture
 
 - **Backend**: Elixir + Phoenix LiveView
-- **Database**: PostgreSQL with full-text search (pg_trgm)
+- **Database**: PostgreSQL with trigram search (pg_trgm)
 - **Frontend**: Phoenix LiveView + Tailwind CSS
-- **Card Data**: Scryfall bulk data (local database)
+- **Card Data**: Scryfall bulk data with COPY import
+- **Deployment**: Fly.io with Postgres
 - **Session Storage**: Browser localStorage
+
+## Tech Stack
+
+| Component | Technology |
+|-----------|------------|
+| Runtime | Elixir 1.18 / OTP 27 |
+| Web Framework | Phoenix 1.7 / LiveView 1.0 |
+| Database | PostgreSQL 17 |
+| HTTP Client | Tesla + Hackney |
+| JSON Parsing | Jason (general) / Jaxon (streaming) |
+| Hosting | Fly.io |
 
 ## License
 
