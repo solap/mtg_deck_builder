@@ -80,3 +80,7 @@ config :phoenix_live_view,
   debug_heex_annotations: true,
   # Enable helpful, but potentially expensive runtime checks
   enable_expensive_runtime_checks: true
+
+# Disable automatic card sync in development (use `mix cards.import` manually)
+config :mtg_deck_builder, MtgDeckBuilder.Cards.CardSyncWorker,
+  enabled: false

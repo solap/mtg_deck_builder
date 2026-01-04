@@ -12,8 +12,8 @@ defmodule MtgDeckBuilder.Application do
       MtgDeckBuilder.Repo,
       {DNSCluster, query: Application.get_env(:mtg_deck_builder, :dns_cluster_query) || :ignore},
       {Phoenix.PubSub, name: MtgDeckBuilder.PubSub},
-      # Start a worker by calling: MtgDeckBuilder.Worker.start_link(arg)
-      # {MtgDeckBuilder.Worker, arg},
+      # Scheduled card data sync
+      MtgDeckBuilder.Cards.CardSyncWorker,
       # Start to serve requests, typically the last entry
       MtgDeckBuilderWeb.Endpoint
     ]

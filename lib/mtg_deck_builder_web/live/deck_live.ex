@@ -3,7 +3,7 @@ defmodule MtgDeckBuilderWeb.DeckLive do
 
   alias MtgDeckBuilder.Cards
   alias MtgDeckBuilder.Decks
-  alias MtgDeckBuilder.Decks.{Deck, Stats}
+  alias MtgDeckBuilder.Decks.{Deck, Stats, Validator}
 
   @impl true
   def mount(_params, _session, socket) do
@@ -17,6 +17,8 @@ defmodule MtgDeckBuilderWeb.DeckLive do
      |> assign(:format, :modern)
      |> assign(:deck, deck)
      |> assign(:stats, Stats.calculate(deck))
+     |> assign(:validation_errors, Validator.get_errors(deck))
+     |> assign(:editing_name, false)
      |> assign(:page_title, "Deck Editor")}
   end
 
@@ -170,7 +172,8 @@ defmodule MtgDeckBuilderWeb.DeckLive do
          socket
          |> assign(:deck, deck)
          |> assign(:format, format)
-         |> assign(:stats, Stats.calculate(deck))}
+         |> assign(:stats, Stats.calculate(deck))
+         |> assign(:validation_errors, Validator.get_errors(deck))}
 
       {:error, _} ->
         {:noreply, socket}
@@ -178,6 +181,27 @@ defmodule MtgDeckBuilderWeb.DeckLive do
   end
 
   def handle_event("load_deck", _params, socket), do: {:noreply, socket}
+
+  def handle_event("edit_name", _params, socket) do
+    {:noreply, assign(socket, :editing_name, true)}
+  end
+
+  def handle_event("save_name", %{"name" => name}, socket) do
+    name = String.trim(name)
+    name = if name == "", do: "New Deck", else: name
+
+    updated_deck = %{socket.assigns.deck | name: name, updated_at: DateTime.utc_now() |> DateTime.to_iso8601()}
+
+    {:noreply,
+     socket
+     |> assign(:deck, updated_deck)
+     |> assign(:editing_name, false)
+     |> sync_deck()}
+  end
+
+  def handle_event("cancel_edit_name", _params, socket) do
+    {:noreply, assign(socket, :editing_name, false)}
+  end
 
   # Load a sample deck from priv/sample_decks
   defp load_sample_deck(name) do
@@ -202,6 +226,7 @@ defmodule MtgDeckBuilderWeb.DeckLive do
 
     socket
     |> assign(:stats, Stats.calculate(deck))
+    |> assign(:validation_errors, Validator.get_errors(deck))
     |> push_event("sync_deck", %{deck_json: deck_json})
   end
 
@@ -340,7 +365,27 @@ defmodule MtgDeckBuilderWeb.DeckLive do
         <div class="flex-1 min-w-0">
           <div class="bg-slate-800 rounded-lg p-4 border border-slate-700">
             <div class="flex items-center justify-between mb-4">
-              <h2 class="text-lg font-semibold text-amber-400">Deck List</h2>
+              <%= if @editing_name do %>
+                <form phx-submit="save_name" phx-click-away="cancel_edit_name" class="flex-1 mr-4">
+                  <input
+                    type="text"
+                    name="name"
+                    value={@deck.name}
+                    autofocus
+                    phx-mounted={JS.focus()}
+                    class="bg-slate-700 border border-amber-400 rounded px-2 py-1 text-lg font-semibold text-amber-400 w-full max-w-xs focus:outline-none focus:ring-2 focus:ring-amber-400"
+                  />
+                </form>
+              <% else %>
+                <h2
+                  class="text-lg font-semibold text-amber-400 cursor-pointer hover:text-amber-300 group flex items-center gap-2"
+                  phx-click="edit_name"
+                  title="Click to edit deck name"
+                >
+                  {@deck.name}
+                  <span class="text-slate-500 group-hover:text-slate-400 text-sm">&#9998;</span>
+                </h2>
+              <% end %>
               <div class="flex items-center gap-3">
                 <button
                   type="button"
@@ -352,6 +397,9 @@ defmodule MtgDeckBuilderWeb.DeckLive do
                 <span class="text-sm text-slate-400 capitalize">{@format} Format</span>
               </div>
             </div>
+
+            <!-- Deck Validity Indicator -->
+            <.deck_validity errors={@validation_errors} />
 
             <div class="grid grid-cols-1 sm:grid-cols-2 gap-4">
               <.board_list
@@ -462,6 +510,33 @@ defmodule MtgDeckBuilderWeb.DeckLive do
     """
   end
 
+  attr :errors, :list, required: true
+
+  defp deck_validity(assigns) do
+    ~H"""
+    <div class="mb-4">
+      <%= if Enum.empty?(@errors) do %>
+        <div class="inline-flex items-center gap-2 bg-green-900/50 border border-green-700 text-green-400 px-3 py-1.5 rounded-lg text-sm">
+          <span class="text-green-400">&#10003;</span>
+          <span>Deck is legal</span>
+        </div>
+      <% else %>
+        <div class="bg-red-900/30 border border-red-700 rounded-lg p-3">
+          <div class="flex items-center gap-2 text-red-400 font-medium text-sm mb-2">
+            <span>&#10007;</span>
+            <span>Deck has {length(@errors)} issue(s)</span>
+          </div>
+          <ul class="text-sm text-red-300 space-y-1 ml-5 list-disc">
+            <%= for error <- @errors do %>
+              <li>{error}</li>
+            <% end %>
+          </ul>
+        </div>
+      <% end %>
+    </div>
+    """
+  end
+
   attr :title, :string, required: true
   attr :board, :string, required: true
   attr :cards, :list, required: true
@@ -505,8 +580,8 @@ defmodule MtgDeckBuilderWeb.DeckLive do
 
   defp card_result(assigns) do
     ~H"""
-    <div class="bg-slate-700 rounded-lg p-3 hover:bg-slate-600 transition-colors cursor-pointer group">
-      <div class="flex items-start justify-between">
+    <details class="bg-slate-700 rounded-lg group">
+      <summary class="flex items-start justify-between p-3 cursor-pointer hover:bg-slate-600 rounded-lg list-none">
         <div class="flex-1 min-w-0">
           <div class="flex items-center gap-2">
             <span class="font-medium text-slate-100 truncate">{@card.name}</span>
@@ -515,14 +590,11 @@ defmodule MtgDeckBuilderWeb.DeckLive do
             </span>
           </div>
           <div class="text-xs text-slate-400 truncate">{@card.type_line}</div>
-          <%= if @card.oracle_text do %>
-            <div class="text-xs text-slate-300 mt-1 line-clamp-2">{@card.oracle_text}</div>
-          <% end %>
           <%= if @card.prices["usd"] do %>
             <div class="text-xs text-green-400 mt-1">${@card.prices["usd"]}</div>
           <% end %>
         </div>
-        <div class="flex flex-col gap-1 ml-2 opacity-0 group-hover:opacity-100 transition-opacity">
+        <div class="flex flex-col gap-1 ml-2">
           <button
             type="button"
             phx-click="add_card"
@@ -542,8 +614,21 @@ defmodule MtgDeckBuilderWeb.DeckLive do
             +Side
           </button>
         </div>
+      </summary>
+      <div class="px-3 pb-3 pt-1 border-t border-slate-600 text-sm">
+        <%= if @card.oracle_text do %>
+          <div class="text-slate-300 whitespace-pre-wrap mb-2">{@card.oracle_text}</div>
+        <% end %>
+        <div class="text-xs text-slate-500 space-y-1">
+          <%= if @card.rarity do %>
+            <div>Rarity: <span class="text-slate-400 capitalize">{@card.rarity}</span></div>
+          <% end %>
+          <%= if @card.set_code do %>
+            <div>Set: <span class="text-slate-400 uppercase">{@card.set_code}</span></div>
+          <% end %>
+        </div>
       </div>
-    </div>
+    </details>
     """
   end
 
