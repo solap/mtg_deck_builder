@@ -55,7 +55,7 @@ config :phoenix, :json_library, Jason
 # Configure Ueberauth for Google OAuth
 config :ueberauth, Ueberauth,
   providers: [
-    google: {Ueberauth.Strategy.Google, [default_scope: "email profile"]}
+    google: {Ueberauth.Strategy.Google, [default_scope: "email profile", prompt: "select_account"]}
   ]
 
 # Configure Tesla to use Hackney adapter
