@@ -11,6 +11,13 @@ config :mtg_deck_builder, :openai,
 config :mtg_deck_builder, :xai,
   api_key: System.get_env("XAI_API_KEY")
 
+# Google OAuth Configuration
+if System.get_env("GOOGLE_CLIENT_ID") do
+  config :ueberauth, Ueberauth.Strategy.Google.OAuth,
+    client_id: System.get_env("GOOGLE_CLIENT_ID"),
+    client_secret: System.get_env("GOOGLE_CLIENT_SECRET")
+end
+
 # config/runtime.exs is executed for all environments, including
 # during releases. It is executed after compilation and before the
 # system starts, so it is typically used to load production configuration

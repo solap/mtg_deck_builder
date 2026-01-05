@@ -52,6 +52,12 @@ config :logger, :console,
 # Use Jason for JSON parsing in Phoenix
 config :phoenix, :json_library, Jason
 
+# Configure Ueberauth for Google OAuth
+config :ueberauth, Ueberauth,
+  providers: [
+    google: {Ueberauth.Strategy.Google, [default_scope: "email profile"]}
+  ]
+
 # Configure Tesla to use Hackney adapter
 config :tesla, adapter: {Tesla.Adapter.Hackney, recv_timeout: 60_000}
 

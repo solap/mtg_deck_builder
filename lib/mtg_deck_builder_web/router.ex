@@ -8,10 +8,24 @@ defmodule MtgDeckBuilderWeb.Router do
     plug :put_root_layout, html: {MtgDeckBuilderWeb.Layouts, :root}
     plug :protect_from_forgery
     plug :put_secure_browser_headers
+    plug MtgDeckBuilderWeb.Plugs.FetchCurrentUser
   end
 
   pipeline :api do
     plug :accepts, ["json"]
+  end
+
+  pipeline :require_admin do
+    plug MtgDeckBuilderWeb.Plugs.RequireAdmin
+  end
+
+  # Auth routes
+  scope "/auth", MtgDeckBuilderWeb do
+    pipe_through :browser
+
+    get "/:provider", AuthController, :request
+    get "/:provider/callback", AuthController, :callback
+    delete "/logout", AuthController, :logout
   end
 
   scope "/", MtgDeckBuilderWeb do
@@ -20,9 +34,9 @@ defmodule MtgDeckBuilderWeb.Router do
     live "/", DeckLive, :index
   end
 
-  # Admin routes (add authentication later)
+  # Admin routes (protected)
   scope "/admin", MtgDeckBuilderWeb.Admin do
-    pipe_through :browser
+    pipe_through [:browser, :require_admin]
 
     live "/settings", SettingsLive, :index
     live "/costs", CostsLive, :index
