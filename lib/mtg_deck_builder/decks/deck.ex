@@ -2,9 +2,16 @@ defmodule MtgDeckBuilder.Decks.Deck do
   @moduledoc """
   Represents a deck with mainboard, sideboard, and removed cards.
   This is stored client-side in localStorage.
+
+  ## Brew Mode
+
+  When `brew_mode` is true, the deck includes a Brew struct that captures
+  the strategic context (archetype, key cards, combos, theme). This context
+  is used by the AI orchestrator for more relevant advice.
   """
 
   alias MtgDeckBuilder.Decks.DeckCard
+  alias MtgDeckBuilder.Brew
 
   @derive Jason.Encoder
   defstruct [
@@ -14,6 +21,8 @@ defmodule MtgDeckBuilder.Decks.Deck do
     mainboard: [],
     sideboard: [],
     removed_cards: [],
+    brew_mode: false,
+    brew: nil,
     created_at: nil,
     updated_at: nil
   ]
@@ -25,6 +34,8 @@ defmodule MtgDeckBuilder.Decks.Deck do
           mainboard: [DeckCard.t()],
           sideboard: [DeckCard.t()],
           removed_cards: [map()],
+          brew_mode: boolean(),
+          brew: Brew.t() | nil,
           created_at: String.t() | nil,
           updated_at: String.t() | nil
         }

@@ -4,9 +4,12 @@ defmodule MtgDeckBuilder.AI.AnthropicClient do
 
   Parses natural language deck commands using Claude's tool_use feature
   to extract structured command data.
+
+  This module is used for command parsing (Haiku model). For general chat
+  with configurable models, use `MtgDeckBuilder.AI.AIClient` instead.
   """
 
-  alias MtgDeckBuilder.AI.{ParsedCommand, ApiLogger}
+  alias MtgDeckBuilder.AI.{ParsedCommand, ApiLogger, AgentRegistry}
 
   @anthropic_api_url "https://api.anthropic.com/v1/messages"
   @default_timeout 10_000
@@ -245,19 +248,31 @@ defmodule MtgDeckBuilder.AI.AnthropicClient do
   end
 
   defp get_api_key do
-    # Try DB first, then fall back to environment config
-    case MtgDeckBuilder.Settings.get_api_key("anthropic") do
-      nil -> Application.get_env(:mtg_deck_builder, :anthropic)[:api_key]
-      "" -> Application.get_env(:mtg_deck_builder, :anthropic)[:api_key]
-      key -> key
+    # Try AgentRegistry provider config, then Settings, then environment
+    case AgentRegistry.get_provider_api_key("anthropic") do
+      nil ->
+        case MtgDeckBuilder.Settings.get_api_key("anthropic") do
+          nil -> Application.get_env(:mtg_deck_builder, :anthropic)[:api_key]
+          "" -> Application.get_env(:mtg_deck_builder, :anthropic)[:api_key]
+          key -> key
+        end
+
+      key ->
+        key
     end
   end
 
   defp get_model do
-    # Try DB first, then fall back to environment config
-    case MtgDeckBuilder.Settings.get_model("anthropic") do
-      nil -> Application.get_env(:mtg_deck_builder, :anthropic)[:model] || "claude-3-haiku-20240307"
-      model -> model
+    # Try AgentRegistry command_parser config, then Settings, then environment
+    case AgentRegistry.get_agent("command_parser") do
+      %{model: model} when is_binary(model) and model != "" ->
+        model
+
+      _ ->
+        case MtgDeckBuilder.Settings.get_model("anthropic") do
+          nil -> Application.get_env(:mtg_deck_builder, :anthropic)[:model] || "claude-3-haiku-20240307"
+          model -> model
+        end
     end
   end
 end

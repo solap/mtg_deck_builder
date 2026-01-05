@@ -338,4 +338,104 @@ defmodule MtgDeckBuilder.Decks do
     |> Map.put(field, [])
     |> Map.put(:updated_at, DateTime.utc_now() |> DateTime.to_iso8601())
   end
+
+  @doc """
+  Adds recommended cards to the specified board.
+  Board can be :mainboard, :sideboard, or :staging
+  Cards should be maps with: scryfall_id, name, quantity, mana_cost, cmc, type_line, colors, prices
+  """
+  def add_recommendations(%Deck{} = deck, cards_by_board) when is_map(cards_by_board) do
+    deck
+    |> add_to_board(:mainboard, Map.get(cards_by_board, :mainboard, []))
+    |> add_to_board(:sideboard, Map.get(cards_by_board, :sideboard, []))
+    |> add_to_staging_cards(Map.get(cards_by_board, :staging, []))
+    |> Map.put(:updated_at, DateTime.utc_now() |> DateTime.to_iso8601())
+  end
+
+  # Add cards to mainboard or sideboard
+  defp add_to_board(deck, _board, []), do: deck
+
+  defp add_to_board(deck, board, cards) when board in [:mainboard, :sideboard] do
+    new_cards =
+      Enum.map(cards, fn card ->
+        %DeckCard{
+          scryfall_id: card.scryfall_id,
+          name: card.name,
+          quantity: card.quantity || 1,
+          mana_cost: card.mana_cost,
+          cmc: card.cmc || 0.0,
+          type_line: card.type_line,
+          oracle_text: nil,
+          colors: card.colors || [],
+          price: get_price(card.prices),
+          is_basic_land: false
+        }
+      end)
+
+    existing = Map.get(deck, board)
+
+    # Merge with existing, avoiding duplicates
+    merged =
+      Enum.reduce(new_cards, existing, fn new_card, acc ->
+        case Enum.find_index(acc, fn c -> c.scryfall_id == new_card.scryfall_id end) do
+          nil ->
+            [new_card | acc]
+
+          index ->
+            List.update_at(acc, index, fn existing_card ->
+              %{existing_card | quantity: existing_card.quantity + new_card.quantity}
+            end)
+        end
+      end)
+
+    Map.put(deck, board, merged)
+  end
+
+  # Add cards to staging (removed_cards)
+  defp add_to_staging_cards(deck, []), do: deck
+
+  defp add_to_staging_cards(deck, cards) do
+    new_staged =
+      Enum.map(cards, fn card ->
+        %RemovedCard{
+          scryfall_id: card.scryfall_id,
+          name: card.name,
+          quantity: card.quantity || 1,
+          mana_cost: card.mana_cost,
+          cmc: card.cmc || 0.0,
+          type_line: card.type_line,
+          oracle_text: nil,
+          colors: card.colors || [],
+          price: get_price(card.prices),
+          is_basic_land: false,
+          removal_reason: card.reason || "AI Recommended",
+          original_board: :mainboard
+        }
+      end)
+
+    merged_staging =
+      Enum.reduce(new_staged, deck.removed_cards, fn new_card, acc ->
+        case Enum.find_index(acc, fn c -> c.scryfall_id == new_card.scryfall_id end) do
+          nil ->
+            [new_card | acc]
+
+          index ->
+            List.update_at(acc, index, fn existing ->
+              %{existing | quantity: existing.quantity + new_card.quantity}
+            end)
+        end
+      end)
+
+    Map.put(deck, :removed_cards, merged_staging)
+  end
+
+  # Legacy function - redirects to new one
+  def add_recommendations_to_staging(%Deck{} = deck, cards) when is_list(cards) do
+    add_recommendations(deck, %{staging: cards})
+  end
+
+  defp get_price(nil), do: nil
+  defp get_price(%{usd: usd}) when is_binary(usd), do: usd
+  defp get_price(%{"usd" => usd}) when is_binary(usd), do: usd
+  defp get_price(_), do: nil
 end

@@ -9,3 +9,6 @@
 #
 # We recommend using the bang functions (`insert!`, `update!`
 # and so on) as they will fail if something goes wrong.
+
+# Seed AI agent and provider configurations
+Code.require_file("seeds/agent_seeds.exs", __DIR__)

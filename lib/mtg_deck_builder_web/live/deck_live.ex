@@ -4,8 +4,12 @@ defmodule MtgDeckBuilderWeb.DeckLive do
   alias MtgDeckBuilder.Cards
   alias MtgDeckBuilder.Decks
   alias MtgDeckBuilder.Decks.{Deck, Stats, Validator}
-  alias MtgDeckBuilder.AI.AnthropicClient
+  alias MtgDeckBuilder.AI.{AnthropicClient, Orchestrator, QuickRouter}
   alias MtgDeckBuilder.Chat.{CommandExecutor, CardResolver, ResponseFormatter, UndoServer}
+  alias MtgDeckBuilder.Brew
+  alias MtgDeckBuilder.Brew.BrewContext
+
+  import MtgDeckBuilderWeb.Components.BrewPanel
 
   require Logger
 
@@ -40,6 +44,12 @@ defmodule MtgDeckBuilderWeb.DeckLive do
       |> assign(:chat_input, "")
       |> assign(:chat_processing, false)
       |> assign(:disambiguation_options, nil)
+      # Brew mode assigns (initialized from deck state loaded from localStorage)
+      |> assign(:brew_mode, deck.brew_mode || false)
+      |> assign(:brew, deck.brew)
+      |> assign(:brew_panel_collapsed, false)
+      |> assign(:brew_search_results, [])
+      |> assign(:brew_search_query, "")
 
     socket = if flash_msg, do: put_flash(socket, :info, flash_msg), else: socket
 
@@ -223,7 +233,9 @@ defmodule MtgDeckBuilderWeb.DeckLive do
          |> assign(:deck, deck)
          |> assign(:format, format)
          |> assign(:stats, Stats.calculate(deck))
-         |> assign(:validation_errors, Validator.get_errors(deck))}
+         |> assign(:validation_errors, Validator.get_errors(deck))
+         |> assign(:brew_mode, deck.brew_mode || false)
+         |> assign(:brew, deck.brew)}
 
       {:error, _} ->
         {:noreply, socket}
@@ -253,6 +265,155 @@ defmodule MtgDeckBuilderWeb.DeckLive do
     {:noreply, assign(socket, :editing_name, false)}
   end
 
+  # Brew mode event handlers
+
+  def handle_event("toggle_brew_mode", _params, socket) do
+    new_brew_mode = not socket.assigns.brew_mode
+
+    # Initialize empty brew when entering brew mode if none exists
+    brew =
+      if new_brew_mode and is_nil(socket.assigns.brew) do
+        Brew.new()
+      else
+        socket.assigns.brew
+      end
+
+    # Update deck with new brew state
+    updated_deck = %{socket.assigns.deck | brew_mode: new_brew_mode, brew: brew}
+
+    {:noreply,
+     socket
+     |> assign(:brew_mode, new_brew_mode)
+     |> assign(:brew, brew)
+     |> assign(:deck, updated_deck)
+     |> sync_deck()}
+  end
+
+  def handle_event("toggle_brew_panel", _params, socket) do
+    {:noreply, assign(socket, :brew_panel_collapsed, not socket.assigns.brew_panel_collapsed)}
+  end
+
+  def handle_event("update_brew_archetype", %{"archetype" => archetype}, socket) do
+    archetype_atom =
+      case archetype do
+        "" -> nil
+        a when is_binary(a) -> String.to_existing_atom(a)
+      end
+
+    case Brew.update(socket.assigns.brew, %{archetype: archetype_atom}) do
+      {:ok, updated_brew} ->
+        updated_deck = %{socket.assigns.deck | brew: updated_brew}
+
+        {:noreply,
+         socket
+         |> assign(:brew, updated_brew)
+         |> assign(:deck, updated_deck)
+         |> sync_deck()}
+
+      {:error, _reason} ->
+        {:noreply, socket}
+    end
+  end
+
+  def handle_event("toggle_color", %{"color" => color}, socket) do
+    current_colors = socket.assigns.brew.colors || []
+
+    new_colors =
+      if color in current_colors do
+        List.delete(current_colors, color)
+      else
+        [color | current_colors]
+      end
+
+    case Brew.update(socket.assigns.brew, %{colors: new_colors}) do
+      {:ok, updated_brew} ->
+        updated_deck = %{socket.assigns.deck | brew: updated_brew}
+
+        {:noreply,
+         socket
+         |> assign(:brew, updated_brew)
+         |> assign(:deck, updated_deck)
+         |> sync_deck()}
+
+      {:error, _reason} ->
+        {:noreply, socket}
+    end
+  end
+
+  def handle_event("search_cards_for_brew", %{"brew_card_search" => query}, socket) when byte_size(query) < 2 do
+    {:noreply, assign(socket, brew_search_results: [], brew_search_query: query)}
+  end
+
+  def handle_event("search_cards_for_brew", %{"brew_card_search" => query}, socket) do
+    results = Cards.search(query, format: socket.assigns.format, limit: 10)
+
+    {:noreply,
+     socket
+     |> assign(:brew_search_query, query)
+     |> assign(:brew_search_results, results)}
+  end
+
+  def handle_event("add_key_card", %{"card" => card_name}, socket) do
+    case Brew.add_key_card(socket.assigns.brew, card_name) do
+      {:ok, updated_brew} ->
+        updated_deck = %{socket.assigns.deck | brew: updated_brew}
+
+        {:noreply,
+         socket
+         |> assign(:brew, updated_brew)
+         |> assign(:deck, updated_deck)
+         |> assign(:brew_search_results, [])
+         |> assign(:brew_search_query, "")
+         |> sync_deck()}
+
+      {:error, reason} ->
+        {:noreply, put_flash(socket, :error, reason)}
+    end
+  end
+
+  def handle_event("remove_key_card", %{"card" => card_name}, socket) do
+    {:ok, updated_brew} = Brew.remove_key_card(socket.assigns.brew, card_name)
+    updated_deck = %{socket.assigns.deck | brew: updated_brew}
+
+    {:noreply,
+     socket
+     |> assign(:brew, updated_brew)
+     |> assign(:deck, updated_deck)
+     |> sync_deck()}
+  end
+
+  def handle_event("update_synergies", %{"synergies" => synergies}, socket) do
+    case Brew.update(socket.assigns.brew, %{synergies: synergies}) do
+      {:ok, updated_brew} ->
+        updated_deck = %{socket.assigns.deck | brew: updated_brew}
+
+        {:noreply,
+         socket
+         |> assign(:brew, updated_brew)
+         |> assign(:deck, updated_deck)
+         |> sync_deck()}
+
+      {:error, reason} ->
+        {:noreply, put_flash(socket, :error, reason)}
+    end
+  end
+
+  def handle_event("update_theme", %{"theme" => theme}, socket) do
+    case Brew.update(socket.assigns.brew, %{theme: theme}) do
+      {:ok, updated_brew} ->
+        updated_deck = %{socket.assigns.deck | brew: updated_brew}
+
+        {:noreply,
+         socket
+         |> assign(:brew, updated_brew)
+         |> assign(:deck, updated_deck)
+         |> sync_deck()}
+
+      {:error, _reason} ->
+        {:noreply, socket}
+    end
+  end
+
   # Chat event handlers
 
   def handle_event("submit_command", %{"command" => ""}, socket), do: {:noreply, socket}
@@ -280,8 +441,13 @@ defmodule MtgDeckBuilderWeb.DeckLive do
           |> assign(:disambiguation_options, nil)
           |> push_event("command_sent", %{command: command})
 
-        # Process command asynchronously
-        send(self(), {:process_command, command})
+        # In brew mode, let the AI classify and route everything
+        # Outside brew mode, use the command parser for deck operations
+        if socket.assigns.brew_mode do
+          send(self(), {:process_brew_question, command})
+        else
+          send(self(), {:process_command, command})
+        end
 
         {:noreply, sync_chat(socket)}
     end
@@ -331,6 +497,11 @@ defmodule MtgDeckBuilderWeb.DeckLive do
     {:noreply, socket}
   end
 
+  def handle_info({:process_brew_question, question}, socket) do
+    socket = process_brew_question(question, socket)
+    {:noreply, socket}
+  end
+
   def handle_info({:execute_with_card, command, card}, socket) do
     # Re-parse and execute with the specific card
     deck_card_names = get_deck_card_names(socket.assigns.deck)
@@ -369,6 +540,188 @@ defmodule MtgDeckBuilderWeb.DeckLive do
     sideboard_names = Enum.map(deck.sideboard, & &1.name)
     staging_names = Enum.map(deck.removed_cards || [], & &1.name)
     Enum.uniq(mainboard_names ++ sideboard_names ++ staging_names)
+  end
+
+  # Process a brew mode question - first try quick router, then orchestrator
+  defp process_brew_question(question, socket) do
+    brew = socket.assigns.brew
+    deck = socket.assigns.deck
+    chat_history = socket.assigns.chat_messages
+
+    # Build context for AI
+    context = BrewContext.build(brew, deck, question, chat_history: chat_history)
+
+    # First, try the quick router for simple intents
+    case QuickRouter.route(context, format: deck.format) do
+      {:handled, response, actions} ->
+        # Quick router handled it directly - apply actions
+        socket = apply_quick_router_actions(socket, actions)
+
+        socket
+        |> assign(:chat_processing, false)
+        |> add_assistant_message(response)
+        |> sync_deck()
+        |> sync_chat()
+
+      {:route_to_orchestrator, _} ->
+        # Complex question or router unavailable - use full orchestrator
+        process_with_orchestrator(context, socket)
+    end
+  end
+
+  # Process question with the full orchestrator
+  defp process_with_orchestrator(context, socket) do
+    deck = socket.assigns.deck
+    brew = socket.assigns.brew
+
+    case Orchestrator.ask(context, format: deck.format) do
+      {:ok, response} ->
+        # Add recommended cards to their respective boards
+        recommended_cards = Map.get(response, :recommended_cards, %{mainboard: [], sideboard: [], staging: []})
+        updated_deck = Decks.add_recommendations(socket.assigns.deck, recommended_cards)
+
+        # Apply any brew settings changes (archetype, colors)
+        brew_settings = Map.get(response, :brew_settings)
+        updated_brew = apply_brew_settings(socket.assigns.brew, brew_settings)
+
+        socket
+        |> assign(:deck, updated_deck)
+        |> assign(:brew, updated_brew)
+        |> assign(:chat_processing, false)
+        |> add_assistant_message(response.content)
+        |> sync_deck()
+        |> sync_chat()
+
+      {:error, reason} ->
+        # Fallback to local stats on error
+        fallback_msg = format_brew_fallback(deck, brew, reason)
+
+        socket
+        |> assign(:chat_processing, false)
+        |> add_assistant_message(fallback_msg)
+        |> sync_chat()
+    end
+  end
+
+  # Apply actions from the quick router
+  defp apply_quick_router_actions(socket, actions) do
+    Enum.reduce(actions, socket, fn action, acc ->
+      apply_quick_router_action(acc, action)
+    end)
+  end
+
+  defp apply_quick_router_action(socket, {:set_archetype, archetype}) do
+    case Brew.update(socket.assigns.brew, %{archetype: archetype}) do
+      {:ok, updated_brew} ->
+        updated_deck = %{socket.assigns.deck | brew: updated_brew}
+        socket
+        |> assign(:brew, updated_brew)
+        |> assign(:deck, updated_deck)
+
+      {:error, _} ->
+        socket
+    end
+  end
+
+  defp apply_quick_router_action(socket, {:set_colors, colors}) do
+    case Brew.update(socket.assigns.brew, %{colors: colors}) do
+      {:ok, updated_brew} ->
+        updated_deck = %{socket.assigns.deck | brew: updated_brew}
+        socket
+        |> assign(:brew, updated_brew)
+        |> assign(:deck, updated_deck)
+
+      {:error, _} ->
+        socket
+    end
+  end
+
+  defp apply_quick_router_action(socket, {:add_cards, board, cards}) do
+    board_atom = case board do
+      "mainboard" -> :mainboard
+      "sideboard" -> :sideboard
+      _ -> :staging
+    end
+
+    recommendations = %{board_atom => cards}
+    updated_deck = Decks.add_recommendations(socket.assigns.deck, recommendations)
+    assign(socket, :deck, updated_deck)
+  end
+
+  defp apply_quick_router_action(socket, {:search_results, _cards}) do
+    # Search results are informational only - no deck changes
+    socket
+  end
+
+  defp apply_quick_router_action(socket, _unknown_action) do
+    socket
+  end
+
+  # Apply brew settings from AI response
+  defp apply_brew_settings(brew, nil), do: brew
+
+  defp apply_brew_settings(brew, settings) when is_map(settings) do
+    updates = %{}
+
+    updates =
+      if settings[:archetype] do
+        Map.put(updates, :archetype, settings[:archetype])
+      else
+        updates
+      end
+
+    updates =
+      if settings[:colors] && length(settings[:colors]) > 0 do
+        Map.put(updates, :colors, settings[:colors])
+      else
+        updates
+      end
+
+    if map_size(updates) > 0 do
+      case Brew.update(brew, updates) do
+        {:ok, updated} -> updated
+        {:error, _} -> brew
+      end
+    else
+      brew
+    end
+  end
+
+  # Format fallback response when orchestrator is unavailable
+  defp format_brew_fallback(deck, brew, _reason) do
+    stats = Stats.calculate(deck)
+
+    parts = ["AI is currently unavailable. Here's what I can tell you locally:\n"]
+
+    parts =
+      if brew && brew.archetype do
+        ["Archetype: #{brew.archetype}" | parts]
+      else
+        parts
+      end
+
+    parts = [
+      "Mainboard: #{Deck.mainboard_count(deck)} cards",
+      "Sideboard: #{Deck.sideboard_count(deck)} cards",
+      "Avg Mana Value: #{stats.average_mana_value}",
+      "Lands: #{stats.type_breakdown["Land"] || 0}"
+      | parts
+    ]
+
+    if brew && !Enum.empty?(brew.key_cards) do
+      card_names = get_deck_card_names(deck)
+      missing = Brew.missing_key_cards(brew, card_names)
+
+      if !Enum.empty?(missing) do
+        ["Missing key cards: #{Enum.join(missing, ", ")}" | parts]
+      else
+        ["All key cards present" | parts]
+      end
+    else
+      parts
+    end
+    |> Enum.reverse()
+    |> Enum.join("\n")
   end
 
   defp execute_parsed_command(parsed_cmd, original_command, socket) do
@@ -611,6 +964,15 @@ defmodule MtgDeckBuilderWeb.DeckLive do
       (data["removed_cards"] || [])
       |> Enum.map(&decode_removed_card/1)
 
+    # Decode brew mode and brew data
+    brew_mode = data["brew_mode"] || false
+
+    brew =
+      case data["brew"] do
+        nil -> nil
+        brew_data when is_map(brew_data) -> decode_brew(brew_data)
+      end
+
     %Deck{
       id: data["id"] || Ecto.UUID.generate(),
       name: data["name"] || "New Deck",
@@ -618,10 +980,21 @@ defmodule MtgDeckBuilderWeb.DeckLive do
       mainboard: mainboard,
       sideboard: sideboard,
       removed_cards: removed_cards,
+      brew_mode: brew_mode,
+      brew: brew,
       created_at: data["created_at"],
       updated_at: data["updated_at"]
     }
   end
+
+  defp decode_brew(data) when is_map(data) do
+    case Brew.new(data) do
+      {:ok, brew} -> brew
+      {:error, _} -> nil
+    end
+  end
+
+  defp decode_brew(_), do: nil
 
   defp decode_deck_card(data) when is_map(data) do
     %MtgDeckBuilder.Decks.DeckCard{
@@ -741,6 +1114,17 @@ defmodule MtgDeckBuilderWeb.DeckLive do
             processing={@chat_processing}
             disambiguation_options={@disambiguation_options}
           />
+
+          <!-- Brew Panel (only shown in brew mode) -->
+          <%= if @brew_mode and @brew do %>
+            <.brew_panel
+              brew={@brew}
+              deck_card_names={get_deck_card_names(@deck)}
+              brew_search_results={@brew_search_results}
+              brew_search_query={@brew_search_query}
+              collapsed={@brew_panel_collapsed}
+            />
+          <% end %>
         </div>
 
         <!-- Deck Panel -->
@@ -768,7 +1152,28 @@ defmodule MtgDeckBuilderWeb.DeckLive do
                   <span class="text-slate-500 group-hover:text-slate-400 text-sm">&#9998;</span>
                 </h2>
               <% end %>
-              <span class="text-sm text-slate-400 capitalize">{@format} Format</span>
+              <div class="flex items-center gap-3">
+                <span class="text-sm text-slate-400 capitalize">{@format} Format</span>
+                <button
+                  type="button"
+                  phx-click="toggle_brew_mode"
+                  class={[
+                    "px-3 py-1 rounded text-sm font-medium transition-colors",
+                    if(@brew_mode,
+                      do: "bg-amber-500 text-slate-900 hover:bg-amber-400",
+                      else: "bg-slate-700 text-slate-300 hover:bg-slate-600 border border-slate-600")
+                  ]}
+                >
+                  <%= if @brew_mode, do: "Exit Brew", else: "Brew Mode" %>
+                </button>
+                <a
+                  href="/admin/agents"
+                  class="px-2 py-1 text-slate-400 hover:text-amber-400 text-sm"
+                  title="Configure AI Agents"
+                >
+                  ⚙️ AI Config
+                </a>
+              </div>
             </div>
 
             <!-- Deck Validity Indicator -->

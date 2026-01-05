@@ -89,12 +89,19 @@ help                          # Show available commands
    mix cards.import
    ```
 
-4. Start the Phoenix server:
+4. Set up environment variables (for AI features):
    ```bash
-   mix phx.server
+   cp .env.example .env.local
+   # Edit .env.local and add your ANTHROPIC_API_KEY
    ```
 
-5. Visit [`localhost:4000`](http://localhost:4000)
+5. Start the Phoenix server:
+   ```bash
+   bin/dev
+   ```
+   This script loads `.env.local` and starts the server. Alternatively: `mix phx.server`
+
+6. Visit [`localhost:4000`](http://localhost:4000)
 
 ## Card Data Architecture
 

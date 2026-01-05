@@ -26,6 +26,9 @@ defmodule MtgDeckBuilderWeb.Router do
 
     live "/settings", SettingsLive, :index
     live "/costs", CostsLive, :index
+    live "/agents", AgentsLive, :index
+    live "/agents/:agent_id", AgentsLive, :show
+    live "/providers", ProvidersLive, :index
   end
 
   # Other scopes may use custom stacks.

@@ -12,6 +12,8 @@ defmodule MtgDeckBuilder.Application do
       MtgDeckBuilder.Repo,
       {DNSCluster, query: Application.get_env(:mtg_deck_builder, :dns_cluster_query) || :ignore},
       {Phoenix.PubSub, name: MtgDeckBuilder.PubSub},
+      # AI agent configuration registry (ETS cache)
+      MtgDeckBuilder.AI.AgentRegistry,
       # Scheduled card data sync
       MtgDeckBuilder.Cards.CardSyncWorker,
       # Chat undo state manager
