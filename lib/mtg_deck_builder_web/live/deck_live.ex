@@ -10,6 +10,7 @@ defmodule MtgDeckBuilderWeb.DeckLive do
   alias MtgDeckBuilder.Brew.BrewContext
 
   import MtgDeckBuilderWeb.Components.BrewPanel
+  import MtgDeckBuilderWeb.Components.MobileTabs
 
   require Logger
 
@@ -50,6 +51,9 @@ defmodule MtgDeckBuilderWeb.DeckLive do
       |> assign(:brew_panel_collapsed, false)
       |> assign(:brew_search_results, [])
       |> assign(:brew_search_query, "")
+      # Mobile UI state
+      |> assign(:active_mobile_tab, :deck)
+      |> assign(:stats_collapsed, true)
 
     socket = if flash_msg, do: put_flash(socket, :info, flash_msg), else: socket
 
@@ -291,6 +295,14 @@ defmodule MtgDeckBuilderWeb.DeckLive do
 
   def handle_event("toggle_brew_panel", _params, socket) do
     {:noreply, assign(socket, :brew_panel_collapsed, not socket.assigns.brew_panel_collapsed)}
+  end
+
+  def handle_event("switch_mobile_tab", %{"tab" => tab}, socket) do
+    {:noreply, assign(socket, :active_mobile_tab, String.to_existing_atom(tab))}
+  end
+
+  def handle_event("toggle_stats", _params, socket) do
+    {:noreply, assign(socket, :stats_collapsed, not socket.assigns.stats_collapsed)}
   end
 
   def handle_event("update_brew_archetype", %{"archetype" => archetype}, socket) do
@@ -1039,12 +1051,20 @@ defmodule MtgDeckBuilderWeb.DeckLive do
   @impl true
   def render(assigns) do
     ~H"""
-    <div id="deck-container" phx-hook="DeckStorage" phx-window-keydown="keydown" class="px-4 py-6">
+    <div id="deck-container" phx-hook="DeckStorage" phx-window-keydown="keydown" class="px-4 py-6 pb-20 lg:pb-6">
       <div class="flex flex-col lg:flex-row gap-6">
-        <!-- Left Column: Search + Chat -->
-        <div class="w-full lg:w-80 xl:w-96 flex-shrink-0 flex flex-col gap-4">
-          <!-- Search Panel -->
-          <div class="bg-slate-800 rounded-lg p-4 border border-slate-700">
+        <!-- Left Column: Search + Chat + Brew -->
+        <!-- On mobile: only show when search/chat/brew tab is active -->
+        <div class={[
+          "w-full lg:w-80 xl:w-96 flex-shrink-0 flex-col gap-4",
+          "hidden lg:flex",
+          @active_mobile_tab in [:search, :chat, :brew] && "!flex"
+        ]}>
+          <!-- Search Panel - show on desktop always, mobile only if search tab -->
+          <div class={[
+            "bg-slate-800 rounded-lg p-4 border border-slate-700",
+            mobile_section_class(:search, @active_mobile_tab)
+          ]}>
             <h2 class="text-lg font-semibold text-amber-400 mb-4">Card Search</h2>
 
             <form phx-submit="search_cards" phx-change="search_cards" class="mb-4">
@@ -1075,7 +1095,7 @@ defmodule MtgDeckBuilderWeb.DeckLive do
             </form>
 
             <!-- Search Results -->
-            <div class="space-y-2 max-h-[35vh] overflow-y-auto">
+            <div class="space-y-2 max-h-[50vh] lg:max-h-[35vh] overflow-y-auto">
               <%= if @search_loading do %>
                 <!-- Loading Skeleton -->
                 <div class="space-y-2">
@@ -1108,27 +1128,34 @@ defmodule MtgDeckBuilderWeb.DeckLive do
             </div>
           </div>
 
-          <!-- Chat Panel -->
-          <.chat_panel
-            messages={@chat_messages}
-            processing={@chat_processing}
-            disambiguation_options={@disambiguation_options}
-          />
+          <!-- Chat Panel - show on desktop always, mobile only if chat tab -->
+          <div class={mobile_section_class(:chat, @active_mobile_tab)}>
+            <.chat_panel
+              messages={@chat_messages}
+              processing={@chat_processing}
+              disambiguation_options={@disambiguation_options}
+            />
+          </div>
 
           <!-- Brew Panel (only shown in brew mode) -->
           <%= if @brew_mode and @brew do %>
-            <.brew_panel
-              brew={@brew}
-              deck_card_names={get_deck_card_names(@deck)}
-              brew_search_results={@brew_search_results}
-              brew_search_query={@brew_search_query}
-              collapsed={@brew_panel_collapsed}
-            />
+            <div class={mobile_section_class(:brew, @active_mobile_tab)}>
+              <.brew_panel
+                brew={@brew}
+                deck_card_names={get_deck_card_names(@deck)}
+                brew_search_results={@brew_search_results}
+                brew_search_query={@brew_search_query}
+                collapsed={@brew_panel_collapsed}
+              />
+            </div>
           <% end %>
         </div>
 
-        <!-- Deck Panel -->
-        <div class="flex-1 min-w-0">
+        <!-- Deck Panel - show on desktop always, mobile only if deck tab -->
+        <div class={[
+          "flex-1 min-w-0",
+          mobile_section_class(:deck, @active_mobile_tab)
+        ]}>
           <div class="bg-slate-800 rounded-lg p-4 border border-slate-700">
             <div class="flex items-center justify-between mb-4">
               <%= if @editing_name do %>
@@ -1234,8 +1261,18 @@ defmodule MtgDeckBuilderWeb.DeckLive do
 
             <!-- Statistics Panel -->
             <div class="mt-4 pt-4 border-t border-slate-700">
-              <h3 class="text-sm font-medium text-amber-400 mb-3">Deck Statistics</h3>
-              <div class="grid grid-cols-2 md:grid-cols-4 gap-4">
+              <button
+                type="button"
+                class="w-full flex items-center justify-between lg:cursor-default"
+                phx-click="toggle_stats"
+              >
+                <h3 class="text-sm font-medium text-amber-400">Deck Statistics</h3>
+                <span class="lg:hidden text-slate-400 text-sm">{if @stats_collapsed, do: "+", else: "-"}</span>
+              </button>
+              <div class={[
+                "mt-3 grid grid-cols-2 md:grid-cols-4 gap-4",
+                if(@stats_collapsed, do: "hidden lg:grid", else: "grid")
+              ]}>
                 <!-- Mana Curve -->
                 <div class="bg-slate-900 rounded-lg p-3 border border-slate-700">
                   <h4 class="text-xs font-medium text-slate-400 mb-2">Mana Curve</h4>
@@ -1297,8 +1334,20 @@ defmodule MtgDeckBuilderWeb.DeckLive do
           </div>
         </div>
       </div>
+
+      <!-- Mobile Tab Bar -->
+      <.mobile_tab_bar active_tab={@active_mobile_tab} brew_mode={@brew_mode} />
     </div>
     """
+  end
+
+  # Helper for mobile section visibility
+  defp mobile_section_class(section, active_tab) do
+    if section == active_tab do
+      "block"
+    else
+      "hidden lg:block"
+    end
   end
 
   attr :messages, :list, required: true
@@ -1316,7 +1365,7 @@ defmodule MtgDeckBuilderWeb.DeckLive do
       </div>
 
       <!-- Messages -->
-      <div class="p-3 space-y-2 max-h-40 overflow-y-auto flex-1" id="chat-messages" phx-hook="ChatScroll">
+      <div class="p-3 space-y-2 max-h-[60vh] lg:max-h-40 overflow-y-auto flex-1" id="chat-messages" phx-hook="ChatScroll">
         <%= if Enum.empty?(@messages) do %>
           <div class="text-slate-500 text-xs text-center py-2">
             <p>"add 4 lightning bolt"</p>

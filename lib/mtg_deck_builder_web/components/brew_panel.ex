@@ -81,20 +81,21 @@ defmodule MtgDeckBuilderWeb.Components.BrewPanel do
           <!-- Archetype Selector -->
           <div>
             <label class="block text-xs font-medium text-slate-400 mb-1">Archetype</label>
-            <select
-              name="archetype"
-              phx-change="update_brew_archetype"
-              class="w-full bg-slate-700 border border-slate-600 rounded px-3 py-2 text-sm text-slate-100 focus:outline-none focus:ring-2 focus:ring-amber-400"
-            >
-              <%= for {label, value} <- @archetypes do %>
-                <option
-                  value={value || ""}
-                  selected={@brew && @brew.archetype && Atom.to_string(@brew.archetype) == value}
-                >
-                  {label}
-                </option>
-              <% end %>
-            </select>
+            <form phx-change="update_brew_archetype">
+              <select
+                name="archetype"
+                phx-hook="SelectSync"
+                id="archetype-select"
+                data-value={(@brew && @brew.archetype && Atom.to_string(@brew.archetype)) || ""}
+                class="w-full bg-slate-700 border border-slate-600 rounded px-3 py-2 text-sm text-slate-100 focus:outline-none focus:ring-2 focus:ring-amber-400"
+              >
+                <%= for {label, value} <- @archetypes do %>
+                  <option value={value || ""}>
+                    {label}
+                  </option>
+                <% end %>
+              </select>
+            </form>
           </div>
 
           <!-- Colors -->
