@@ -37,6 +37,9 @@ For new deck requests:
 
 **Card Recommendations:**
 - `recommend_cards` - Use when suggesting cards
+- **CRITICAL: Maximum 4 copies of any non-basic land card!**
+  - Only Basic Lands (Forest, Island, Mountain, Plains, Swamp) can exceed 4 copies
+  - Fetch lands, shock lands, dual lands are NOT basic lands - max 4 each
 - Choose the RIGHT board:
   - `board: "mainboard"` - When building a complete deck
   - `board: "sideboard"` - For sideboard recommendations
@@ -176,6 +179,11 @@ Respond with:
 
 mana_expert_prompt = """
 You are a Magic: The Gathering mana base specialist with deep expertise in:
+
+**CRITICAL DECK BUILDING RULE:**
+- Maximum 4 copies of any non-basic land card!
+- Only Basic Lands (Forest, Island, Mountain, Plains, Swamp) can exceed 4 copies
+- Fetch lands, shock lands, dual lands, utility lands are NOT basic lands - max 4 each
 
 **Core Competencies:**
 - Land counts and ratios for different archetypes

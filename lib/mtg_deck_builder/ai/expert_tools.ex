@@ -156,6 +156,11 @@ defmodule MtgDeckBuilder.AI.ExpertTools do
         description: """
         Add cards to the user's deck. Use this tool when recommending specific cards.
 
+        CRITICAL DECK BUILDING RULE:
+        - Maximum 4 copies of any non-basic land card (this is a fundamental Magic rule!)
+        - Only Basic Lands (Forest, Island, Mountain, Plains, Swamp) can exceed 4 copies
+        - Fetch lands, shock lands, dual lands, etc. are NOT basic lands - max 4 copies each
+
         IMPORTANT - Choose the right board:
         - "mainboard" - Use for complete deck builds (user asked for "a deck", "build me X")
         - "sideboard" - Use for sideboard recommendations
@@ -172,7 +177,7 @@ defmodule MtgDeckBuilder.AI.ExpertTools do
                 type: "object",
                 properties: %{
                   name: %{type: "string", description: "Exact card name"},
-                  quantity: %{type: "integer", description: "Number of copies (1-4 for most cards)"},
+                  quantity: %{type: "integer", description: "Number of copies (1-4 max, only basic lands can exceed 4)", minimum: 1, maximum: 4},
                   reason: %{type: "string", description: "Brief reason for recommendation"}
                 },
                 required: ["name", "quantity"]
