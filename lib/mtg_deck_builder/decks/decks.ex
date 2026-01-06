@@ -358,6 +358,7 @@ defmodule MtgDeckBuilder.Decks do
   defp add_to_board(deck, board, cards) when board in [:mainboard, :sideboard] do
     new_cards =
       Enum.map(cards, fn card ->
+        is_basic = is_basic_land?(card)
         %DeckCard{
           scryfall_id: card.scryfall_id,
           name: card.name,
@@ -368,27 +369,56 @@ defmodule MtgDeckBuilder.Decks do
           oracle_text: nil,
           colors: card.colors || [],
           price: get_price(card.prices),
-          is_basic_land: false
+          is_basic_land: is_basic
         }
       end)
 
     existing = Map.get(deck, board)
 
-    # Merge with existing, avoiding duplicates
+    # Merge with existing, enforcing 4-copy limit for non-basic lands
     merged =
       Enum.reduce(new_cards, existing, fn new_card, acc ->
         case Enum.find_index(acc, fn c -> c.scryfall_id == new_card.scryfall_id end) do
           nil ->
-            [new_card | acc]
+            # New card - cap at 4 unless basic land
+            capped_card = cap_quantity(new_card, deck)
+            [capped_card | acc]
 
           index ->
+            # Existing card - update quantity but cap total at 4 unless basic land
             List.update_at(acc, index, fn existing_card ->
-              %{existing_card | quantity: existing_card.quantity + new_card.quantity}
+              new_qty = existing_card.quantity + new_card.quantity
+              max_qty = if existing_card.is_basic_land, do: new_qty, else: min(new_qty, @max_copies)
+              %{existing_card | quantity: max_qty}
             end)
         end
       end)
 
     Map.put(deck, board, merged)
+  end
+
+  # Cap quantity at 4 for non-basic lands, considering existing copies in deck
+  defp cap_quantity(card, deck) do
+    if card.is_basic_land do
+      card
+    else
+      existing_count = Deck.card_count(deck, card.scryfall_id)
+      max_can_add = max(0, @max_copies - existing_count)
+      %{card | quantity: min(card.quantity, max_can_add)}
+    end
+  end
+
+  # Determine if a card is a basic land from its data
+  defp is_basic_land?(card) do
+    # Check for is_basic_land field first
+    cond do
+      Map.has_key?(card, :is_basic_land) -> card.is_basic_land
+      Map.has_key?(card, "is_basic_land") -> card["is_basic_land"]
+      true ->
+        # Fall back to checking type_line
+        type_line = Map.get(card, :type_line) || Map.get(card, "type_line") || ""
+        String.contains?(type_line, "Basic Land")
+    end
   end
 
   # Add cards to staging (removed_cards)
