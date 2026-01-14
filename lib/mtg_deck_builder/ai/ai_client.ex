@@ -34,7 +34,8 @@ defmodule MtgDeckBuilder.AI.AIClient do
         ]
 
   # Maximum tool call iterations to prevent infinite loops
-  @max_tool_iterations 5
+  # Deck building needs: set_brew_settings + experts + multiple recommend_cards batches
+  @max_tool_iterations 10
 
   @doc """
   Makes a chat request using the specified agent configuration.

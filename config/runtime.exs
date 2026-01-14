@@ -48,11 +48,16 @@ if config_env() == :prod do
 
   maybe_ipv6 = if System.get_env("ECTO_IPV6") in ~w(true 1), do: [:inet6], else: []
 
+  # Enable TCP keepalive to prevent fly.io from dropping idle connections
+  socket_options = maybe_ipv6 ++ [keepalive: true]
+
   config :mtg_deck_builder, MtgDeckBuilder.Repo,
     # ssl: true,
     url: database_url,
     pool_size: String.to_integer(System.get_env("POOL_SIZE") || "10"),
-    socket_options: maybe_ipv6
+    socket_options: socket_options,
+    # Send keepalive query every 60 seconds to prevent connection timeouts
+    idle_interval: 60_000
 
   # The secret key base is used to sign/encrypt cookies and other secrets.
   # A default value is used in config/dev.exs and config/test.exs but you

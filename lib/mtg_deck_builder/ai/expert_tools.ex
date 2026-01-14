@@ -196,17 +196,26 @@ defmodule MtgDeckBuilder.AI.ExpertTools do
       %{
         name: "set_brew_settings",
         description: """
-        Set the deck's brew settings (archetype and/or colors).
+        Set the deck's brew settings (format, archetype, and/or colors).
         Use this when the user specifies what kind of deck they want to build.
 
+        IMPORTANT: Always set the format when the user mentions a format name!
+
         Examples:
-        - User says "aggro deck" → set archetype to "aggro"
+        - User says "standard aggro" → set format to "standard", archetype to "aggro"
+        - User says "modern deck" → set format to "modern"
+        - User says "pioneer control" → set format to "pioneer", archetype to "control"
         - User says "orzhov aggro" → set archetype to "aggro", colors to ["W", "B"]
         - User says "blue control" → set archetype to "control", colors to ["U"]
         """,
         input_schema: %{
           type: "object",
           properties: %{
+            format: %{
+              type: "string",
+              enum: ["standard", "modern", "pioneer", "legacy", "vintage", "pauper", "commander"],
+              description: "The deck format - SET THIS when user mentions a format!"
+            },
             archetype: %{
               type: "string",
               enum: ["aggro", "midrange", "control", "combo", "tempo", "ramp"],

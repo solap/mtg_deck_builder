@@ -592,15 +592,22 @@ defmodule MtgDeckBuilderWeb.DeckLive do
         recommended_cards = Map.get(response, :recommended_cards, %{mainboard: [], sideboard: [], staging: []})
         updated_deck = Decks.add_recommendations(socket.assigns.deck, recommended_cards)
 
-        # Apply any brew settings changes (archetype, colors)
+        # Apply any brew settings changes (archetype, colors, format)
         brew_settings = Map.get(response, :brew_settings)
         updated_brew = apply_brew_settings(socket.assigns.brew, brew_settings)
+
+        # Apply format change if AI detected a format from the user's message
+        {updated_deck, socket} = apply_format_from_settings(updated_deck, brew_settings, socket)
+
+        # Build the final message, including rejection info if any
+        rejected_cards = Map.get(response, :rejected_cards, [])
+        final_message = format_ai_response_with_rejections(response.content, rejected_cards, socket.assigns.format)
 
         socket
         |> assign(:deck, updated_deck)
         |> assign(:brew, updated_brew)
         |> assign(:chat_processing, false)
-        |> add_assistant_message(response.content)
+        |> add_assistant_message(final_message)
         |> sync_deck()
         |> sync_chat()
 
@@ -612,6 +619,38 @@ defmodule MtgDeckBuilderWeb.DeckLive do
         |> assign(:chat_processing, false)
         |> add_assistant_message(fallback_msg)
         |> sync_chat()
+    end
+  end
+
+  # Format AI response to include rejection info when cards were filtered
+  defp format_ai_response_with_rejections(content, [], _format), do: content
+  defp format_ai_response_with_rejections(content, rejected_cards, format) do
+    # Group rejections by reason
+    not_legal = Enum.filter(rejected_cards, & &1.reason in ["not_legal", "banned"])
+    not_found = Enum.filter(rejected_cards, & &1.reason == "not_found")
+
+    rejection_parts = []
+
+    rejection_parts = if length(not_legal) > 0 do
+      names = Enum.map(not_legal, & &1.name) |> Enum.uniq() |> Enum.take(5)
+      more = if length(not_legal) > 5, do: " (+#{length(not_legal) - 5} more)", else: ""
+      format_name = format |> to_string() |> String.capitalize()
+      ["⚠️ Some cards aren't legal in #{format_name}: #{Enum.join(names, ", ")}#{more}" | rejection_parts]
+    else
+      rejection_parts
+    end
+
+    rejection_parts = if length(not_found) > 0 do
+      names = Enum.map(not_found, & &1.name) |> Enum.uniq() |> Enum.take(3)
+      ["Cards not found: #{Enum.join(names, ", ")}" | rejection_parts]
+    else
+      rejection_parts
+    end
+
+    if length(rejection_parts) > 0 do
+      content <> "\n\n" <> Enum.join(Enum.reverse(rejection_parts), "\n")
+    else
+      content
     end
   end
 
@@ -699,42 +738,106 @@ defmodule MtgDeckBuilderWeb.DeckLive do
     end
   end
 
+  # Apply format change from AI-detected settings
+  defp apply_format_from_settings(deck, nil, socket), do: {deck, socket}
+
+  defp apply_format_from_settings(deck, settings, socket) when is_map(settings) do
+    require Logger
+
+    case settings[:format] || settings["format"] do
+      nil ->
+        {deck, socket}
+
+      format_string when is_binary(format_string) ->
+        try do
+          format_atom = String.to_existing_atom(format_string)
+
+          # Only apply if it's different from the current format
+          if format_atom != socket.assigns.format do
+            Logger.info("AI detected format '#{format_atom}' from chat, changing from '#{socket.assigns.format}'")
+
+            # Move illegal cards to removed (same logic as change_format handler)
+            {updated_deck, count_moved} = Decks.move_illegal_to_removed(deck, format_atom)
+
+            if count_moved > 0 do
+              Logger.info("Moved #{count_moved} illegal card(s) to removed after format change")
+            end
+
+            # Update the socket with new format
+            updated_socket = assign(socket, :format, format_atom)
+
+            {updated_deck, updated_socket}
+          else
+            {deck, socket}
+          end
+        rescue
+          ArgumentError -> {deck, socket}  # Invalid format string
+        end
+
+      _ ->
+        {deck, socket}
+    end
+  end
+
   # Format fallback response when orchestrator is unavailable
-  defp format_brew_fallback(deck, brew, _reason) do
-    stats = Stats.calculate(deck)
+  defp format_brew_fallback(deck, brew, reason) do
+    # Format the error reason for user display
+    error_msg = format_error_reason(reason)
 
-    parts = ["AI is currently unavailable. Here's what I can tell you locally:\n"]
+    # For empty decks, give a more helpful message
+    if Deck.mainboard_count(deck) == 0 do
+      """
+      I encountered an error while processing your request: #{error_msg}
 
-    parts =
-      if brew && brew.archetype do
-        ["Archetype: #{brew.archetype}" | parts]
+      Please try again in a moment. If the problem persists, try a simpler request first, like "help me build a standard aggro deck".
+      """
+    else
+      stats = Stats.calculate(deck)
+
+      parts = ["I encountered an error (#{error_msg}). Here's your current deck status:\n"]
+
+      parts =
+        if brew && brew.archetype do
+          ["Archetype: #{brew.archetype}" | parts]
+        else
+          parts
+        end
+
+      parts = [
+        "Mainboard: #{Deck.mainboard_count(deck)} cards",
+        "Sideboard: #{Deck.sideboard_count(deck)} cards",
+        "Avg Mana Value: #{stats.average_mana_value}",
+        "Lands: #{stats.type_breakdown["Land"] || 0}"
+        | parts
+      ]
+
+      if brew && !Enum.empty?(brew.key_cards) do
+        card_names = get_deck_card_names(deck)
+        missing = Brew.missing_key_cards(brew, card_names)
+
+        if !Enum.empty?(missing) do
+          ["Missing key cards: #{Enum.join(missing, ", ")}" | parts]
+        else
+          ["All key cards present" | parts]
+        end
       else
         parts
       end
-
-    parts = [
-      "Mainboard: #{Deck.mainboard_count(deck)} cards",
-      "Sideboard: #{Deck.sideboard_count(deck)} cards",
-      "Avg Mana Value: #{stats.average_mana_value}",
-      "Lands: #{stats.type_breakdown["Land"] || 0}"
-      | parts
-    ]
-
-    if brew && !Enum.empty?(brew.key_cards) do
-      card_names = get_deck_card_names(deck)
-      missing = Brew.missing_key_cards(brew, card_names)
-
-      if !Enum.empty?(missing) do
-        ["Missing key cards: #{Enum.join(missing, ", ")}" | parts]
-      else
-        ["All key cards present" | parts]
-      end
-    else
-      parts
+      |> Enum.reverse()
+      |> Enum.join("\n")
     end
-    |> Enum.reverse()
-    |> Enum.join("\n")
   end
+
+  defp format_error_reason(reason) when is_binary(reason) do
+    cond do
+      String.contains?(reason, "Maximum tool iterations") -> "AI response timeout"
+      String.contains?(reason, "timeout") -> "request timed out"
+      String.contains?(reason, "rate_limit") -> "rate limited, try again shortly"
+      true -> "AI temporarily unavailable"
+    end
+  end
+
+  defp format_error_reason(_), do: "AI temporarily unavailable"
 
   defp execute_parsed_command(parsed_cmd, original_command, socket) do
     deck = socket.assigns.deck

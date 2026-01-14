@@ -89,6 +89,7 @@ defmodule MtgDeckBuilder.AI.Orchestrator do
     # Initialize tracking
     Process.put(:experts_consulted, [])
     Process.put(:recommended_cards, %{mainboard: [], sideboard: [], staging: []})
+    Process.put(:rejected_cards, [])
     Process.put(:brew_settings, nil)
 
     # Create a tool executor that handles expert consultations and action tools
@@ -113,6 +114,7 @@ defmodule MtgDeckBuilder.AI.Orchestrator do
         latency = System.monotonic_time(:millisecond) - start_time
         consulted = Process.get(:experts_consulted, []) |> Enum.reverse() |> Enum.uniq()
         recommended = Process.get(:recommended_cards, %{mainboard: [], sideboard: [], staging: []})
+        rejected = Process.get(:rejected_cards, [])
         brew_settings = Process.get(:brew_settings)
 
         # Log the request
@@ -124,7 +126,14 @@ defmodule MtgDeckBuilder.AI.Orchestrator do
 
         total_cards = length(recommended.mainboard) + length(recommended.sideboard) + length(recommended.staging)
         if total_cards > 0 do
-          Logger.info("Orchestrator recommended #{total_cards} card(s): #{length(recommended.mainboard)} mainboard, #{length(recommended.sideboard)} sideboard, #{length(recommended.staging)} staging")
+          # Log detailed card info for debugging
+          all_cards = recommended.mainboard ++ recommended.sideboard ++ recommended.staging
+          card_details = Enum.map(all_cards, fn c -> "#{c.name}x#{c.quantity}" end) |> Enum.join(", ")
+          Logger.info("Orchestrator recommended #{total_cards} card(s): #{card_details}")
+        end
+
+        if length(rejected) > 0 do
+          Logger.info("Orchestrator rejected #{length(rejected)} card(s) for legality")
         end
 
         response = %{
@@ -133,6 +142,7 @@ defmodule MtgDeckBuilder.AI.Orchestrator do
           provider: config.provider,
           experts_consulted: consulted,
           recommended_cards: recommended,
+          rejected_cards: rejected,
           brew_settings: brew_settings
         }
 
@@ -148,9 +158,16 @@ defmodule MtgDeckBuilder.AI.Orchestrator do
 
   # Handle action tools (recommend_cards, set_brew_settings)
   defp handle_action_tool("recommend_cards", input, context) do
-    cards = input["cards"] || []
+    # Parse cards - handle both list and JSON string (AI sometimes returns string)
+    cards_raw = input["cards"] || []
+    cards = parse_cards_input(cards_raw)
+
     board = input["board"] || "staging"
-    format = context.format
+
+    # Use format from brew_settings if AI just set it, otherwise use context format
+    # This handles the case where AI calls set_brew_settings then recommend_cards in same turn
+    brew_settings = Process.get(:brew_settings)
+    format = get_effective_format(brew_settings, context.format)
 
     # Validate board
     board_atom = case board do
@@ -162,32 +179,39 @@ defmodule MtgDeckBuilder.AI.Orchestrator do
     # Look up cards in the database and validate them
     validated_cards = validate_and_lookup_cards(cards, format)
 
-    # Track the validated recommendations by board
+    # Track the validated recommendations by board, merging duplicates
     current = Process.get(:recommended_cards, %{mainboard: [], sideboard: [], staging: []})
-    updated = Map.update!(current, board_atom, fn existing -> validated_cards ++ existing end)
+    existing_in_board = Map.get(current, board_atom, [])
+
+    # Merge new cards with existing, enforcing 4-copy limit per card
+    merged = merge_card_lists(existing_in_board, validated_cards)
+
+    updated = Map.put(current, board_atom, merged)
     Process.put(:recommended_cards, updated)
 
-    # Return a confirmation message to the AI
-    if length(validated_cards) > 0 do
-      card_names = Enum.map(validated_cards, & &1.name) |> Enum.join(", ")
-      "Added #{length(validated_cards)} card(s) to #{board}: #{card_names}"
-    else
-      "No valid cards found to recommend."
-    end
+    # Return a confirmation message to the AI with rejection details
+    # This helps the AI adjust its text response to not mention rejected cards
+    rejected = Process.get(:rejected_cards, [])
+    rejected_this_batch = Enum.take(rejected, length(cards) - length(validated_cards))
+
+    build_tool_response(validated_cards, rejected_this_batch, board, format)
   end
 
   defp handle_action_tool("set_brew_settings", input, _context) do
+    format = input["format"]
     archetype = input["archetype"]
     colors = input["colors"] || []
 
-    settings = %{archetype: archetype, colors: colors}
+    settings = %{format: format, archetype: archetype, colors: colors}
     Process.put(:brew_settings, settings)
 
     parts = []
+    parts = if format, do: ["format: #{format}" | parts], else: parts
     parts = if archetype, do: ["archetype: #{archetype}" | parts], else: parts
     parts = if length(colors) > 0, do: ["colors: #{Enum.join(colors, ", ")}" | parts], else: parts
 
     if length(parts) > 0 do
+      Logger.info("Brew settings updated: #{Enum.join(parts, ", ")}")
       "Updated brew settings: #{Enum.join(parts, ", ")}"
     else
       "No brew settings to update."
@@ -198,9 +222,120 @@ defmodule MtgDeckBuilder.AI.Orchestrator do
     "Unknown action: #{unknown}"
   end
 
+  # Build a detailed response for the AI about what cards were added/rejected
+  # This helps the AI write accurate text that doesn't mention rejected cards
+  defp build_tool_response(validated_cards, rejected_cards, board, format) do
+    parts = []
+
+    # Report what was added
+    parts = if length(validated_cards) > 0 do
+      names = Enum.map(validated_cards, & &1.name) |> Enum.join(", ")
+      ["ADDED to #{board}: #{names}" | parts]
+    else
+      parts
+    end
+
+    # Report what was rejected - this is critical for AI to adjust its response
+    parts = if length(rejected_cards) > 0 do
+      format_name = format |> to_string() |> String.capitalize()
+      rejected_names = Enum.map(rejected_cards, & &1.name) |> Enum.uniq() |> Enum.join(", ")
+      ["REJECTED (not legal in #{format_name}): #{rejected_names}. Do NOT mention these cards in your response - they were not added to the deck." | parts]
+    else
+      parts
+    end
+
+    if length(parts) > 0 do
+      Enum.reverse(parts) |> Enum.join("\n")
+    else
+      "No cards processed."
+    end
+  end
+
+  # Get the effective format, preferring brew_settings if set
+  defp get_effective_format(nil, context_format), do: context_format
+  defp get_effective_format(brew_settings, context_format) when is_map(brew_settings) do
+    case brew_settings[:format] || brew_settings["format"] do
+      nil -> context_format
+      format_string when is_binary(format_string) ->
+        try do
+          String.to_existing_atom(format_string)
+        rescue
+          ArgumentError -> context_format
+        end
+      format_atom when is_atom(format_atom) -> format_atom
+      _ -> context_format
+    end
+  end
+
+  # Parse cards input - handle both list and JSON string formats
+  # AI sometimes returns a JSON string instead of a parsed list
+  defp parse_cards_input(cards) when is_list(cards), do: cards
+
+  defp parse_cards_input(cards) when is_binary(cards) do
+    Logger.warning("AI returned cards as JSON string, parsing...")
+    # Clean up common JSON issues from AI responses
+    cleaned = cards
+      |> String.trim()
+      |> fix_trailing_json()
+
+    case Jason.decode(cleaned) do
+      {:ok, parsed} when is_list(parsed) -> parsed
+      {:ok, _} ->
+        Logger.error("AI returned cards JSON that isn't a list: #{String.slice(cards, 0, 100)}")
+        []
+      {:error, reason} ->
+        Logger.error("Failed to parse AI cards JSON: #{inspect(reason)}")
+        []
+    end
+  end
+
+  defp parse_cards_input(_), do: []
+
+  # Fix common JSON formatting issues from AI
+  defp fix_trailing_json(json) do
+    cond do
+      # Extra closing brace after array: "...]}"
+      String.ends_with?(json, "]}") and not String.contains?(json, "{\"") ->
+        String.slice(json, 0..-2//1)
+      # Extra closing brace
+      String.ends_with?(json, "]}") ->
+        # Check if it's actually malformed by counting braces
+        open_braces = json |> String.graphemes() |> Enum.count(&(&1 == "{"))
+        close_braces = json |> String.graphemes() |> Enum.count(&(&1 == "}"))
+        if close_braces > open_braces do
+          String.slice(json, 0..-2//1)
+        else
+          json
+        end
+      true ->
+        json
+    end
+  end
+
+  # Merge two card lists, combining duplicates and enforcing 4-copy limit
+  defp merge_card_lists(existing, new_cards) do
+    Enum.reduce(new_cards, existing, fn new_card, acc ->
+      case Enum.find_index(acc, fn c -> c.scryfall_id == new_card.scryfall_id end) do
+        nil ->
+          # New card - add it
+          [new_card | acc]
+
+        index ->
+          # Card already exists - merge quantities, cap at 4 (unless basic land)
+          List.update_at(acc, index, fn existing_card ->
+            combined_qty = existing_card.quantity + new_card.quantity
+            max_qty = if existing_card[:is_basic_land], do: combined_qty, else: min(combined_qty, 4)
+            %{existing_card | quantity: max_qty}
+          end)
+      end
+    end)
+  end
+
   # Validate card names against the database and return full card data
   defp validate_and_lookup_cards(cards, format) do
     alias MtgDeckBuilder.Cards
+
+    Logger.info("Validating #{length(cards)} card(s) for format: #{inspect(format)}")
 
     cards
     |> Enum.map(fn card_input ->
@@ -212,30 +347,46 @@ defmodule MtgDeckBuilder.AI.Orchestrator do
       case Cards.search(name, limit: 1) do
         [found_card | _] ->
           # Check format legality if format specified
-          legal = is_nil(format) || check_legality(found_card, format)
+          case check_legality(found_card, format) do
+            :legal ->
+              # Cap quantity at 4 for non-basic lands
+              max_qty = if found_card.is_basic_land, do: quantity, else: min(quantity, 4)
 
-          if legal do
-            %{
-              name: found_card.name,
-              scryfall_id: found_card.scryfall_id,
-              quantity: min(quantity, 4),
-              reason: reason,
-              mana_cost: found_card.mana_cost,
-              type_line: found_card.type_line,
-              cmc: found_card.cmc,
-              colors: found_card.colors,
-              prices: found_card.prices
-            }
-          else
-            nil
+              %{
+                name: found_card.name,
+                scryfall_id: found_card.scryfall_id,
+                quantity: max_qty,
+                reason: reason,
+                mana_cost: found_card.mana_cost,
+                type_line: found_card.type_line,
+                cmc: found_card.cmc,
+                colors: found_card.colors,
+                prices: found_card.prices,
+                is_basic_land: found_card.is_basic_land
+              }
+
+            {:illegal, status} ->
+              Logger.warning("Card #{found_card.name} rejected: #{status} in #{inspect(format)}")
+              # Track rejected card for user feedback
+              rejected = Process.get(:rejected_cards, [])
+              rejection = %{name: found_card.name, reason: status, format: format}
+              Process.put(:rejected_cards, [rejection | rejected])
+              nil
           end
 
         [] ->
+          Logger.warning("Card not found: #{name}")
+          # Track as rejected with "not_found" reason
+          rejected = Process.get(:rejected_cards, [])
+          rejection = %{name: name, reason: "not_found", format: format}
+          Process.put(:rejected_cards, [rejection | rejected])
           nil
       end
     end)
     |> Enum.reject(&is_nil/1)
   end
+
+  defp check_legality(_card, nil), do: :legal
 
   defp check_legality(card, format) when is_atom(format) do
     check_legality(card, Atom.to_string(format))
@@ -243,9 +394,17 @@ defmodule MtgDeckBuilder.AI.Orchestrator do
 
   defp check_legality(card, format) when is_binary(format) do
     case card.legalities do
-      %{^format => "legal"} -> true
-      legalities when is_map(legalities) -> legalities[format] == "legal"
-      _ -> true  # If no legality data, assume legal
+      legalities when is_map(legalities) ->
+        status = legalities[format]
+        cond do
+          status == "legal" -> :legal
+          status == "restricted" -> :legal  # Allowed but should be max 1 copy (handled elsewhere)
+          status in ["banned", "not_legal"] -> {:illegal, status}
+          is_nil(status) -> :legal  # Format not in legalities map, assume legal
+          true -> {:illegal, status}
+        end
+      _ ->
+        :legal  # If no legality data, assume legal
     end
   end
 
